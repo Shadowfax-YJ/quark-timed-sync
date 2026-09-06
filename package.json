@@ -1,0 +1,32 @@
+{
+  "name": "quark-timed-sync",
+  "productName": "夸克网盘定时同步",
+  "version": "1.0.1",
+  "description": "夸克文件夹与分享链接的追加下载订阅",
+  "main": "src/main.cjs",
+  "author": "quark-timed-sync contributors",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/*.test.cjs",
+    "vendor": "node scripts/vendor.cjs",
+    "package": "node scripts/package.cjs",
+    "smoke": "electron . --smoke-test"
+  },
+  "dependencies": {
+    "qrcode": "1.5.4",
+    "tough-cookie": "6.0.2"
+  },
+  "devDependencies": {
+    "@electron/packager": "20.3.0",
+    "electron": "43.6.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Shadowfax-YJ/quark-timed-sync.git"
+  },
+  "homepage": "https://github.com/Shadowfax-YJ/quark-timed-sync",
+  "bugs": {
+    "url": "https://github.com/Shadowfax-YJ/quark-timed-sync/issues"
+  }
+}

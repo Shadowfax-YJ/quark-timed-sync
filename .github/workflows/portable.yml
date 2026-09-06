@@ -1,0 +1,66 @@
+name: Portable builds
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: portable-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            name: macOS-AppleSilicon
+          - os: windows-latest
+            name: Windows-x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - uses: actions/setup-go@v5
+        if: runner.os == 'macOS'
+        with:
+          go-version: '1.26.2'
+          cache: false
+      - run: npm run vendor
+      - run: npm test
+      - run: npm run package
+      - name: Verify packaged Mac application
+        if: runner.os == 'macOS'
+        run: |
+          test "$(uname -m)" = arm64
+          export ARCHIVE_TEST_DATA_DIR="$RUNNER_TEMP/quark-sync-smoke"
+          export ARCHIVE_SMOKE_OUTPUT="$GITHUB_WORKSPACE/test-output/mac-smoke.png"
+          "out/夸克网盘定时同步-darwin-arm64/夸克网盘定时同步.app/Contents/MacOS/夸克网盘定时同步" --smoke-test
+          cat test-output/smoke-result.json
+      - name: Verify packaged Windows application and autostart
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:ARCHIVE_TEST_DATA_DIR = Join-Path $env:RUNNER_TEMP 'quark-sync-smoke'
+          $env:ARCHIVE_SMOKE_OUTPUT = Join-Path $env:GITHUB_WORKSPACE 'test-output/windows-smoke.png'
+          $appPath = Join-Path (Get-Location) 'out/夸克网盘定时同步-win32-x64/夸克网盘定时同步.exe'
+          $process = Start-Process -FilePath $appPath -ArgumentList '--smoke-test','--test-startup' -Wait -PassThru -WindowStyle Hidden
+          Get-Content test-output/smoke-result.json
+          if ($process.ExitCode -ne 0) { throw 'Packaged application verification failed' }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: QuarkTimedSync-${{ matrix.name }}
+          path: |
+            out/*portable.zip
+            out/*.sha256
+            test-output/*.png
+            test-output/*.json
+          retention-days: 14
+          compression-level: 0

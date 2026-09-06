@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>夸克网盘定时同步</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <aside>
+    <div class="brand"><img src="../../assets/icon.png" alt=""><div>夸克网盘定时同步<span>让新增文件自己到达</span></div></div>
+    <div class="nav active"><span>▤</span> 下载订阅</div>
+    <div class="sidebar-bottom">
+      <div class="connection"><i id="account-dot"></i><span id="account-status">检查登录状态</span></div>
+      <button id="account-button" class="subtle full">登录夸克网盘</button>
+      <div class="divider"></div>
+      <label class="toggle"><span>下载完成通知</span><input id="notifications" type="checkbox" checked></label>
+      <label class="toggle"><span>登录电脑时启动</span><input id="autostart" type="checkbox"></label>
+      <button id="quit" class="exit">退出并停止下载 ↗</button>
+      <span id="version" class="version"></span>
+    </div>
+  </aside>
+  <main>
+    <header><div><div class="eyebrow">夸克网盘 · 自动下载</div><h1>夸克网盘定时同步</h1><p>选好来源，新增文件会自动保存到你的电脑。</p></div><button id="global-pause" class="subtle">暂停全部</button></header>
+    <div class="summary"><span class="live-dot"></span><span id="overall">准备好接收新文件</span><span class="summary-right">只追加 · 已有文件跳过</span></div>
+    <div class="section-heading"><h2>我的订阅 <span id="count">0</span></h2><button id="add-subscription" class="primary">＋ 添加订阅</button></div>
+    <section id="jobs" aria-live="polite"></section>
+    <section id="empty" class="empty">
+      <div class="empty-icon">↓</div><h2>为一个文件夹开启自动下载</h2>
+      <p>从自己的网盘或分享链接中选择内容，<br>定时检查，有新增就下载。</p>
+      <button id="empty-add" class="primary">创建第一个订阅</button>
+      <div class="steps"><span>01 扫码登录</span><b>→</b><span>02 选择来源</span><b>→</b><span>03 选择本地目录</span></div>
+    </section>
+    <footer>关闭窗口会留在托盘运行；选择“退出并停止下载”会停止全部任务。</footer>
+  </main>
+  <div id="toast" role="status" hidden></div>
+  <dialog id="login-dialog">
+    <div class="dialog-heading"><div><div class="eyebrow">连接你的账号</div><h2>登录夸克网盘</h2></div><button id="close-login" class="icon-button" aria-label="关闭">×</button></div>
+    <p class="muted">用手机夸克扫描二维码，并在手机上确认登录。</p>
+    <div class="qr-box"><img id="qr-image" alt="夸克登录二维码" hidden><p id="qr-status">正在准备二维码…</p></div>
+    <button id="refresh-login" class="subtle full">刷新二维码</button>
+    <p class="help">登录信息由系统加密保存。每个人使用自己的夸克账号。</p>
+    <button id="logout" class="danger-text full" hidden>退出当前夸克账号（暂停订阅）</button>
+  </dialog>
+  <dialog id="wizard">
+    <div class="dialog-heading"><div><div class="eyebrow">新建下载订阅</div><h2>让更新自动到达</h2></div><button id="cancel-wizard" class="icon-button" aria-label="关闭">×</button></div>
+    <label class="field">订阅名称<input id="job-name" placeholder="例如：archive、项目资料" maxlength="80" value="archive"></label>
+    <div class="field"><span><b class="step-number">1</b> 文件从哪里来</span>
+      <div class="segmented"><button data-mode="drive" class="selected">我的网盘文件夹</button><button data-mode="share">别人分享的链接</button></div>
+    </div>
+    <div id="drive-controls"><button id="choose-drive" class="subtle full">浏览夸克网盘，选择文件夹 →</button></div>
+    <div id="share-controls" hidden>
+      <textarea id="share-url" placeholder="粘贴夸克分享链接，可包含整段分享文字" rows="2"></textarea>
+      <div class="row"><input id="share-passcode" placeholder="提取码（如有）" maxlength="32"><button id="read-share" class="subtle">读取分享</button></div>
+      <label class="check-help"><input id="allow-save" type="checkbox"><span>允许先转存到我网盘的「Archive 订阅」目录，再下载到本地。转存内容会占用我的网盘空间，程序不会自动删除它。</span></label>
+    </div>
+    <div id="source-label" class="selected-path">尚未选择来源</div>
+    <div class="field"><span><b class="step-number">2</b> 下载到哪里</span><button id="choose-local" class="subtle full">选择本地文件夹 →</button><div id="local-label" class="selected-path">尚未选择本地目录</div></div>
+    <div class="row between"><label class="interval-label">检查间隔 <input id="interval" type="number" min="5" max="1440" value="60"> 分钟</label><span class="help">有新增就下载</span></div>
+    <div class="policy">✓ 保持目录结构　✓ 已有文件跳过　✓ 不覆盖、不删除</div>
+    <div class="dialog-actions"><span id="wizard-error" class="error" role="alert"></span><button id="save-subscription" class="primary">创建并开始订阅</button></div>
+  </dialog>
+  <dialog id="folder-dialog">
+    <div class="dialog-heading"><h2>选择要订阅的文件夹</h2><button id="close-folders" class="icon-button" aria-label="关闭">×</button></div>
+    <div class="breadcrumb"><button id="folder-up" class="subtle">↑ 上一级</button><span id="folder-path">网盘根目录</span></div>
+    <div id="folder-list" class="folder-list"></div>
+    <p id="folder-detail" class="help"></p>
+    <div class="dialog-actions"><button id="select-current" class="primary">订阅当前文件夹</button></div>
+  </dialog>
+  <dialog id="remove-dialog">
+    <h2>移除这个订阅？</h2><p>停止继续检查。已经下载到本地和转存到网盘的文件都会保留。</p>
+    <div class="dialog-actions"><button id="cancel-remove" class="subtle">取消</button><button id="confirm-remove" class="primary">移除订阅</button></div>
+  </dialog>
+  <script src="app.js"></script>
+</body>
+</html>
