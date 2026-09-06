@@ -37,7 +37,14 @@ async function main() {
   const archive = `${name}-${version}-${platform === 'darwin' ? 'macOS-AppleSilicon' : 'Windows-x64'}-portable.zip`;
   const zip = path.join(root, 'out', archive);
   if (platform === 'darwin') execFileSync('ditto', ['-c', '-k', '--sequesterRsrc', '--keepParent', appDir, zip], { stdio: 'inherit' });
-  else execFileSync('tar', ['-a', '-c', '-f', zip, '-C', path.dirname(appDir), path.basename(appDir)], { stdio: 'inherit', windowsHide: true });
+  else {
+    await fs.unlink(zip).catch(error => { if (error.code !== 'ENOENT') throw error; });
+    // Windows tar can lose Chinese paths under an English system code page.
+    // .NET uses Unicode paths and stores UTF-8 entry names in the ZIP.
+    execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+      'Add-Type -AssemblyName System.IO.Compression.FileSystem; [System.IO.Compression.ZipFile]::CreateFromDirectory($env:QUARK_PACKAGE_DIRECTORY, $env:QUARK_PACKAGE_ZIP, [System.IO.Compression.CompressionLevel]::Optimal, $true)'],
+    { stdio: 'inherit', windowsHide: true, env: { ...process.env, QUARK_PACKAGE_DIRECTORY: appDir, QUARK_PACKAGE_ZIP: zip } });
+  }
   const hash = crypto.createHash('sha256').update(await fs.readFile(zip)).digest('hex');
   await fs.writeFile(zip + '.sha256', `${hash}  ${archive}\n`);
   console.log(JSON.stringify({ archive: zip, directory: appDir, sha256: hash }));
