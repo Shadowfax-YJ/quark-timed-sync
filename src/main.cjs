@@ -1,5 +1,5 @@
 'use strict';
-const { app, BrowserWindow, ipcMain, dialog, Tray, Menu, Notification, nativeImage, safeStorage, shell, powerMonitor, net } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Tray, Menu, Notification, nativeImage, safeStorage, shell, powerMonitor, net, clipboard } = require('electron');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
@@ -11,6 +11,7 @@ const { atomicJson, validateDestination } = require('./model.cjs');
 const { Updater } = require('./updater.cjs');
 const { electronFetcher } = require('./update-network.cjs');
 const { startup, registerLinuxDesktop } = require('./desktop.cjs');
+const { LogStore, sanitize } = require('./logs.cjs');
 
 // Keep profile/keychain identity stable across the visible application rename.
 app.setName('Archive Subscriptions');
@@ -23,6 +24,14 @@ if (process.platform === 'linux') { app.setDesktopName('quark-timed-sync.desktop
 const dataDir = app.getPath('userData');
 const stateFile = path.join(dataDir, 'subscriptions.json');
 const credentialFile = path.join(dataDir, 'credentials.bin');
+const logs = new LogStore(path.join(dataDir, 'logs'));
+const log = (level, source, message, context) => logs.write(level, source, message, context);
+const jobContext = job => ({ jobId: job.id, jobName: job.name });
+let logEventTimer;
+logs.on('changed', () => {
+  if (logEventTimer || quitting) return;
+  logEventTimer = setTimeout(() => { logEventTimer = null; if (window && !window.isDestroyed()) window.webContents.send('archive:logs-changed'); }, 150);
+});
 const assets = path.join(__dirname, '..', 'assets');
 const vendorDir = app.isPackaged ? path.join(process.resourcesPath, 'vendor') : path.join(__dirname, '..', 'vendor', `${process.platform}-${process.arch}`);
 const uiPath = path.join(__dirname, 'ui', 'index.html');
@@ -81,7 +90,7 @@ function show() { if (window && !window.isDestroyed()) { window.show(); window.f
 async function setPaused(paused) {
   config.paused = Boolean(paused); if (paused) { pauseGeneration++; engine.stop(); }
   else for (const job of config.jobs) if (job.enabled) job.nextRun = Date.now();
-  await persist(); if (!paused) tick();
+  await persist(); log('info', 'subscription', paused ? '已暂停全部订阅' : '已恢复全部订阅'); if (!paused) tick();
 }
 async function runJob(job) {
   if (!loggedIn) throw new Error('请先扫码登录夸克');
@@ -106,13 +115,14 @@ async function quit() {
   clearInterval(timer); loginController?.abort();
   if (testStartup) app.setLoginItemSettings({ openAtLogin: false });
   await updater?.stop(); await engine?.close(); await writeQueue.catch(() => {});
+  await log('info', 'app', '应用退出，已停止后台任务'); await logs.close(); clearTimeout(logEventTimer);
   app.quit();
 }
 function register(name, handler) {
   ipcMain.handle('archive:' + name, async (event, ...args) => {
     if (event.sender !== window?.webContents || !event.senderFrame?.url.startsWith('file://')) throw new Error('不允许的调用来源');
     try { return { ok: true, value: await handler(...args) }; }
-    catch (err) { return { ok: false, error: safeError(err) }; }
+    catch (err) { if (!name.startsWith('logs-')) log('error', 'app', '操作失败：' + name, { details: { error: sanitize(err) } }); return { ok: false, error: safeError(err) }; }
   });
 }
 function approveSource(source) {
@@ -128,6 +138,7 @@ async function beginLogin() {
   loginController?.abort(); const controller = new AbortController(); loginController = controller;
   const signal = controller.signal;
   loginState = { state: 'loading' }; emit();
+  log('info', 'account', '开始扫码登录');
   const candidate = new Quark();
   const qr = smoke ? { url: 'Archive Subscriptions test QR', expiresAt: Date.now() + 180000 } : await candidate.beginLogin(signal);
   loginState = { state: 'waiting', image: await QRCode.toDataURL(qr.url, { width: 240, margin: 1 }), expiresAt: qr.expiresAt }; emit();
@@ -141,18 +152,35 @@ async function beginLogin() {
           await saveSecret(candidate.jar.serializeSync());
           quark = candidate; engine.quark = candidate;
           loggedIn = true; loginState = { state: 'success' }; selectedShare = null; approvedSources.clear();
+          log('info', 'account', '夸克账号登录成功');
           emit(); tick(); return;
         }
       }
-      loginState = { state: 'expired' }; emit();
+      loginState = { state: 'expired' }; log('warn', 'account', '登录二维码已过期'); emit();
     } catch (err) {
-      if (!signal.aborted) { loginState = { state: 'error', error: safeError(err) }; emit(); }
+      if (!signal.aborted) { loginState = { state: 'error', error: safeError(err) }; log('error', 'account', '扫码登录失败', { details: { error: err } }); emit(); }
     }
   })();
 }
 
 function setupIPC() {
   register('state', () => snapshot());
+  register('logs-query', filter => logs.query(filter));
+  register('logs-settings', settings => logs.configure(settings));
+  register('logs-clear', () => logs.clear());
+  register('logs-copy', text => { if (typeof text !== 'string' || text.length > 40000) throw new Error('日志内容过长'); clipboard.writeText(text); });
+  register('logs-open', async () => { const error = await shell.openPath(logs.directory); if (error) throw new Error(error); });
+  register('logs-export', async (filter, format) => {
+    if (!['text', 'jsonl'].includes(format)) throw new Error('日志导出格式无效');
+    const extension = format === 'jsonl' ? 'jsonl' : 'txt';
+    const name = '夸克同步日志-' + new Date().toISOString().slice(0, 10) + '.' + extension;
+    const result = smoke ? { filePath: path.join(dataDir, name) } : await dialog.showSaveDialog(window, {
+      title: '导出筛选后的全部日志', defaultPath: path.join(app.getPath('downloads'), name),
+      filters: [{ name: format === 'jsonl' ? 'JSON Lines' : '文本日志', extensions: [extension] }]
+    });
+    if (result.canceled || !result.filePath) return null;
+    return { ...await logs.export(result.filePath, filter, format), file: result.filePath };
+  });
   register('login', beginLogin);
   register('cancel-login', () => { loginController?.abort(); loginState = { state: 'idle' }; emit(); });
   register('logout', async () => {
@@ -163,6 +191,7 @@ function setupIPC() {
     const service = path.resolve(dataDir, 'service');
     if (service.startsWith(path.resolve(dataDir) + path.sep)) await fs.rm(service, { recursive: true, force: true });
     quark = new Quark(); engine.quark = quark; loggedIn = false;
+    log('info', 'account', '已退出夸克账号');
     loginState = { state: 'idle' }; selectedShare = null; approvedSources.clear(); emit();
   });
   register('choose-folder', async () => {
@@ -204,32 +233,38 @@ function setupIPC() {
     }
     const job = { id: crypto.randomUUID(), name: String(input.name || '新订阅').trim().slice(0, 80) || '新订阅',
       source, destination, interval, enabled: true, nextRun: Date.now() };
-    config.jobs.push(job); approvedSources.delete(input.sourceToken); await persist(); tick(); return job.id;
+    config.jobs.push(job); approvedSources.delete(input.sourceToken); await persist();
+    log('info', 'subscription', '已创建订阅', { ...jobContext(job), details: { kind: source.kind, intervalMinutes: interval, destination } }); tick(); return job.id;
   });
   register('toggle-job', async id => {
     const job = config.jobs.find(x => x.id === id); if (!job) throw new Error('订阅不存在');
     job.enabled = !job.enabled; if (!job.enabled && states.get(id)?.phase && ['checking', 'saving', 'downloading'].includes(states.get(id).phase)) engine.stop();
     if (job.enabled) job.nextRun = Date.now(); await persist(); tick();
+    log('info', 'subscription', job.enabled ? '已恢复订阅' : '已暂停订阅', jobContext(job));
   });
   register('remove-job', async id => {
     const job = config.jobs.find(x => x.id === id); if (!job) return;
     if (engine.running) throw new Error('请先暂停当前下载，再移除订阅');
     config.jobs = config.jobs.filter(x => x.id !== id); states.delete(id); await persist();
+    log('info', 'subscription', '已移除订阅，已有文件保留', jobContext(job));
   });
   register('check-job', async id => {
     const job = config.jobs.find(x => x.id === id); if (!job) throw new Error('订阅不存在');
     if (engine.running) throw new Error('已有订阅正在运行');
+    log('info', 'subscription', '手动检查订阅', jobContext(job));
     runJob(job).catch(err => update(id, { phase: 'error', error: safeError(err), current: safeError(err) }));
   });
   register('set-interval', async (id, value) => {
     const job = config.jobs.find(x => x.id === id), interval = Number(value);
     if (!job || !Number.isInteger(interval) || interval < 5 || interval > 1440) throw new Error('检查间隔需要在 5 到 1440 分钟之间');
     job.interval = interval; job.nextRun = Date.now() + interval * 60000; await persist();
+    log('info', 'subscription', `检查间隔已改为 ${interval} 分钟`, jobContext(job));
   });
   register('pause', value => setPaused(value));
   register('notifications', async value => { config.notifications = Boolean(value); await persist(); });
   register('auto-updates', async value => {
     config.autoUpdates = Boolean(value); await persist();
+    log('info', 'updater', config.autoUpdates ? '已开启自动检查软件更新' : '已关闭自动检查软件更新');
     if (!smoke) updater.enable(config.autoUpdates);
   });
   register('check-update', () => { updater.check().catch(() => {}); });
@@ -245,6 +280,7 @@ function setupIPC() {
     if (!smoke || testStartup) startupSettings.set(Boolean(value));
     const enabled = startupEnabled(); emit();
     if ((!smoke || testStartup) && enabled !== Boolean(value)) throw new Error('系统未能保存开机启动设置，请检查系统的启动项设置');
+    log('info', 'app', enabled ? '已开启登录电脑时启动' : '已关闭登录电脑时启动');
     return enabled;
   });
   register('open-destination', id => {
@@ -345,8 +381,40 @@ async function smokeTest() {
   await evaluate("document.querySelector('#open-updates').click()");
   await fs.writeFile(path.join(path.dirname(output), 'updates.png'), (await window.webContents.capturePage()).toPNG());
   await evaluate("document.querySelector('#close-updates').click()");
+  await log('warn', 'subscription', '测试：检查已暂停', jobContext(config.jobs[0]));
+  await log('error', 'download', '测试：下载失败，下次检查重试', { ...jobContext(config.jobs[0]), details: { file: '目录/测试.zip', error: 'network timeout', token: 'smoke-private-token' } });
+  await evaluate("document.querySelector('#nav-logs').click()"); await delay(900);
+  assert(await evaluate("!document.querySelector('#logs-view').hidden && document.querySelector('#subscriptions-view').hidden && document.querySelectorAll('#log-rows tr').length > 0"), 'logs navigation or persisted records failed');
+  await evaluate("document.querySelector('#log-level').value='error'; document.querySelector('#log-level').dispatchEvent(new Event('change'))"); await delay(600);
+  assert(await evaluate("document.querySelectorAll('#log-rows tr').length === 1 && document.querySelector('#log-rows').textContent.includes('下载失败')"), 'log level filter failed');
+  await evaluate("document.querySelector('#log-rows button').click()"); await delay(100);
+  assert(await evaluate("document.querySelector('#log-detail-dialog').open && document.querySelector('#log-detail-content').textContent.includes('测试.zip') && !document.querySelector('#log-detail-content').textContent.includes('smoke-private-token')"), 'log details or redaction failed');
+  await evaluate("document.querySelector('#log-detail-copy').click()"); await delay(100);
+  assert(clipboard.readText().includes('测试.zip') && !clipboard.readText().includes('smoke-private-token'), 'copy log details failed');
+  await evaluate("document.querySelector('#log-detail-close').click(); document.querySelector('#log-search').value='不存在的日志'; document.querySelector('#log-search').dispatchEvent(new Event('input'))"); await delay(600);
+  assert(await evaluate("!document.querySelector('#log-empty').hidden"), 'log search empty state failed');
+  await evaluate("document.querySelector('#log-search').value=''; document.querySelector('#log-search').dispatchEvent(new Event('input'))"); await delay(600);
+  await evaluate("document.querySelector('#log-export-format').value='jsonl'; document.querySelector('#log-export').click()"); await delay(400);
+  const exportFile = (await fs.readdir(dataDir)).find(name => name.endsWith('.jsonl'));
+  const exportedLogs = (await fs.readFile(path.join(dataDir, exportFile), 'utf8')).trim().split('\n').map(JSON.parse);
+  assert(exportedLogs.length === 1 && exportedLogs[0].level === 'error', 'filtered log export failed');
+  await evaluate("document.querySelector('#log-reset').click()"); await delay(600);
+  await evaluate("document.querySelector('#log-live').click()"); await delay(100);
+  const rowCount = await evaluate("document.querySelectorAll('#log-rows tr').length");
+  await log('info', 'app', '测试：暂停刷新期间继续记录'); await delay(900);
+  assert(await evaluate("document.querySelectorAll('#log-rows tr').length") === rowCount, 'pause log refresh failed');
+  await evaluate("document.querySelector('#log-live').click()"); await delay(400);
+  assert(await evaluate("document.querySelector('#log-rows').textContent.includes('暂停刷新期间继续记录')"), 'resume log refresh failed');
+  await evaluate("document.querySelector('#log-settings').click()"); await delay(100);
+  await evaluate("document.querySelector('#log-days').value='7'; document.querySelector('#log-record-level').value='debug'; document.querySelector('#log-settings-save').click()"); await delay(300);
+  assert(logs.settings.days === 7 && logs.settings.level === 'debug', 'log retention preferences failed');
+  await fs.writeFile(path.join(path.dirname(output), 'logs.png'), (await window.webContents.capturePage()).toPNG());
+  await evaluate("document.querySelector('#log-clear').click(); document.querySelector('#log-clear-confirm').click()"); await delay(400);
+  assert((await logs.query()).total === 0 && config.jobs.length === 1 && config.paused, 'clear logs modified subscriptions or retained records');
+  await evaluate("document.querySelector('#nav-subscriptions').click()"); await delay(100);
+  assert(await evaluate("!document.querySelector('#subscriptions-view').hidden && document.querySelector('#logs-view').hidden"), 'return to subscriptions failed');
   assert(errors.length === 0, 'renderer error: ' + errors.join('; '));
-  await atomicJson(path.join(path.dirname(output), 'smoke-result.json'), { ok: true, platform: process.platform, arch: process.arch, version: app.getVersion(), checks: ['packaged rclone', 'packaged OpenList startup and shutdown', 'render', 'system tray icon', 'folder picker', 'drive subscription', 'pause persistence', 'share parsing', 'share subfolder', ...(iconCheck ? ['Windows native taskbar icon size and branding'] : []), ...(testStartup ? ['Windows autostart enable, reload, disable'] : [])], screenshot: path.basename(output) });
+  await atomicJson(path.join(path.dirname(output), 'smoke-result.json'), { ok: true, platform: process.platform, arch: process.arch, version: app.getVersion(), checks: ['packaged rclone', 'packaged OpenList startup and shutdown', 'render', 'system tray icon', 'folder picker', 'drive subscription', 'pause persistence', 'share parsing', 'share subfolder', 'log navigation, filtering, details, credential redaction, copy, export, pause/resume refresh, retention settings and clear', ...(iconCheck ? ['Windows native taskbar icon size and branding'] : []), ...(testStartup ? ['Windows autostart enable, reload, disable'] : [])], screenshot: path.basename(output) });
   await quit();
 }
 
@@ -358,6 +426,8 @@ else {
   app.on('activate', show);
   app.whenReady().then(async () => {
     await fs.mkdir(dataDir, { recursive: true, mode: 0o700 });
+    await logs.init().catch(error => { logs.failure = '日志初始化失败：' + sanitize(error.message); });
+    log('info', 'app', '应用启动', { details: { version: app.getVersion(), platform: process.platform, arch: process.arch } });
     try {
       const read = JSON.parse(await fs.readFile(stateFile, 'utf8'));
       if (read.version !== 1 || !Array.isArray(read.jobs)) throw new Error('配置格式不支持');
@@ -370,12 +440,17 @@ else {
       catch (err) { if (err.code !== 'ENOENT') loginState = { state: 'error', error: '登录凭据无法在此系统读取，请重新扫码登录' }; }
     }
     quark = new Quark(jar, saveSecret);
-    engine = new Engine({ dataDir, vendorDir, quark, update, persist, notify });
+    engine = new Engine({ dataDir, vendorDir, quark, update, persist, notify, log });
     updater = new Updater({ dataDir, version: app.getVersion(), packaged: app.isPackaged && !smoke,
       fetcher: smoke ? async () => new Response('', { status: 404 }) : electronFetcher(net) });
-    let notifiedVersion;
+    let notifiedVersion, loggedUpdatePhase;
     updater.on('state', state => {
       emit();
+      if (state.phase !== loggedUpdatePhase) {
+        loggedUpdatePhase = state.phase;
+        const messages = { checking: '正在检查软件更新', current: '当前没有新版本', downloading: '正在下载软件更新', verifying: '正在校验更新包', ready: '软件更新已准备好', installing: '正在安装软件更新', error: '软件更新失败' };
+        if (messages[state.phase]) log(state.phase === 'error' ? 'error' : 'info', 'updater', messages[state.phase], { details: { version: state.version, error: state.error || undefined } });
+      }
       if (state.phase === 'ready' && notifiedVersion !== state.version) {
         notifiedVersion = state.version; notify('软件更新已下载', `v${state.version} 已准备好，打开“软件更新”可重启安装。`);
       }
@@ -408,11 +483,11 @@ else {
     if (smoke) return smokeTest();
     if (config.autoUpdates) updater.enable(true);
     if (jar) {
-      quark.list('0').then(() => { loggedIn = true; emit(); tick(); }).catch(err => { loginState = { state: 'error', error: safeError(err) }; emit(); });
+      quark.list('0').then(() => { loggedIn = true; log('info', 'account', '已连接夸克网盘'); emit(); tick(); }).catch(err => { loginState = { state: 'error', error: safeError(err) }; log('error', 'account', '夸克连接失败，请检查网络或重新登录', { details: { error: err } }); emit(); });
     }
     timer = setInterval(() => tick(), 5000);
-    powerMonitor.on('resume', () => tick());
-    powerMonitor.on('suspend', () => engine.stop());
+    powerMonitor.on('resume', () => { log('info', 'app', '电脑已唤醒，恢复订阅调度'); tick(); });
+    powerMonitor.on('suspend', () => { log('info', 'app', '电脑进入睡眠，停止当前下载'); engine.stop(); });
   }).catch(async err => {
     if (smoke) {
       if (testStartup) app.setLoginItemSettings({ openAtLogin: false });

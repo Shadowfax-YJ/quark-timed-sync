@@ -14,8 +14,8 @@ async function availablePort() {
   });
 }
 class Engine {
-  constructor({ dataDir, vendorDir, quark, update, persist, notify }) {
-    Object.assign(this, { dataDir, vendorDir, quark, update, persist, notify });
+  constructor({ dataDir, vendorDir, quark, update, persist, notify, log = () => {} }) {
+    Object.assign(this, { dataDir, vendorDir, quark, update, persist, notify, log });
     this.children = new Set(); this.controller = null; this.server = null; this.running = false;
     this.copyProcess = null; this.port = 0; this.auth = ''; this.password = ''; this.starting = null;
   }
@@ -23,6 +23,8 @@ class Engine {
   spawn(name, args, options = {}) {
     const child = spawn(this.binary(name), args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], ...options });
     this.children.add(child); child.once('close', () => this.children.delete(child));
+    this.log('debug', 'service', `启动内置 ${name}`);
+    child.once('close', code => this.log('debug', 'service', `内置 ${name} 已结束`, { details: { exitCode: code } }));
     return child;
   }
   async command(name, args, options = {}) {
@@ -132,19 +134,25 @@ class Engine {
     }
     this.update(job.id, { phase: 'saving', current: '检查分享中的新增内容' });
     await reconcileShare(this.quark, share, job.source.fid || '0', job.source.targetFid, signal,
-      progress => this.update(job.id, progress));
+      progress => {
+        this.update(job.id, progress);
+        this.log('info', 'transfer', '分享文件已转存', { jobId: job.id, jobName: job.name, details: { file: progress.current, saved: progress.saved } });
+      });
     return { fid: job.source.targetFid, client: this.quark };
   }
   async run(job) {
     if (this.running) throw new Error('已有订阅正在运行，请稍后再试');
     this.running = true; this.controller = new AbortController();
     const signal = this.controller.signal;
+    const started = Date.now(), context = { jobId: job.id, jobName: job.name };
+    this.log('info', 'subscription', '开始检查新增文件', context);
     let filesFile;
     try {
       this.update(job.id, { phase: 'checking', error: '', current: '连接夸克', discovered: 0, skipped: 0, transferred: 0, bytes: 0 });
       const { fid, client } = job.source.kind === 'share' ? await this.shareRoot(job, signal)
         : { fid: job.source.fid, client: this.quark };
       const plan = await prepareFiles(client, fid, job.destination, signal, progress => this.update(job.id, progress));
+      this.log('info', 'subscription', `检查完成：新增 ${plan.files.length} 个，跳过 ${plan.skipped} 个已有文件`, { ...context, details: { added: plan.files.length, skipped: plan.skipped, totalBytes: plan.totalBytes } });
       if (plan.files.length) {
         const mountPath = await this.mount(job, fid, signal);
         filesFile = path.join(this.dataDir, 'files-' + job.id + '.txt');
@@ -156,14 +164,16 @@ class Engine {
       if (signal.aborted) throw abortError();
       job.lastSuccess = new Date().toISOString(); job.lastCount = plan.files.length; job.lastError = '';
       this.update(job.id, { phase: 'idle', current: plan.files.length ? `已下载 ${plan.files.length} 个新文件` : `没有新增文件，已跳过 ${plan.skipped} 个已有文件`, transferred: plan.files.length });
+      this.log('info', 'subscription', plan.files.length ? `订阅完成，已下载 ${plan.files.length} 个新文件` : '本次订阅检查完成，没有新增文件', { ...context, details: { downloaded: plan.files.length, durationMs: Date.now() - started } });
       if (plan.files.length) this.notify('下载完成', `${job.name}：已下载 ${plan.files.length} 个新文件`);
     } catch (err) {
-      if (signal.aborted || err.name === 'AbortError') this.update(job.id, { phase: 'paused', current: '已停止，未完成的下载下次继续' });
+      if (signal.aborted || err.name === 'AbortError') { this.update(job.id, { phase: 'paused', current: '已停止，未完成的下载下次继续' }); this.log('warn', 'subscription', '检查或下载已停止，未完成的文件下次继续', context); }
       else {
         const message = err.message || '下载失败，请稍后重试';
         this.update(job.id, { phase: 'error', error: message, current: message });
         if (job.lastError !== message) this.notify('订阅需要处理', `${job.name}：${message}`);
         job.lastError = message;
+        this.log('error', 'subscription', message, { ...context, details: { error: err, durationMs: Date.now() - started } });
       }
     } finally {
       if (filesFile) await fs.unlink(filesFile).catch(() => {});
@@ -178,7 +188,7 @@ class Engine {
         RCLONE_CONFIG_ARCHIVE_URL: `http://127.0.0.1:${this.port}/dav${mountPath}/`,
         RCLONE_CONFIG_ARCHIVE_VENDOR: 'other', RCLONE_CONFIG_ARCHIVE_USER: 'admin', RCLONE_CONFIG_ARCHIVE_PASS: password };
       const child = this.spawn('rclone', copyArgs('archive:', job.destination, filesFile), { env });
-      this.copyProcess = child; let buffer = ''; let lastError = '';
+      this.copyProcess = child; let buffer = ''; let lastError = '', lastProgress = 0;
       const consume = chunk => {
         buffer += chunk.toString();
         let newline;
@@ -186,6 +196,11 @@ class Engine {
           const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1);
           try {
             const entry = JSON.parse(line);
+            if (entry.stats && Date.now() - lastProgress > 30000) {
+              lastProgress = Date.now(); this.log('debug', 'download', '下载进度', { jobId: job.id, jobName: job.name,
+                details: { bytes: entry.stats.bytes, speed: entry.stats.speed, transferred: entry.stats.transfers } });
+            }
+            if (entry.level === 'info' && /^Copied \(/.test(entry.msg || '')) this.log('info', 'download', '文件下载完成', { jobId: job.id, jobName: job.name, details: { file: entry.object } });
             if (entry.stats) this.update(job.id, { phase: 'downloading', bytes: entry.stats.bytes || 0,
               speed: entry.stats.speed || 0, transferred: entry.stats.transfers || 0,
               current: entry.stats.transferring?.[0]?.name || '下载新增文件' });

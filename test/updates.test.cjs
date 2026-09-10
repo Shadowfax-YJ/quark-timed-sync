@@ -46,7 +46,7 @@ async function payload(root, version, platform = process.platform, arch = proces
   await writeLayout(root, platform, arch, version); return spec;
 }
 
-test('stable versions compare numerically and releases select all five native assets', () => {
+test('stable versions compare numerically and releases select supported native and Universal assets', () => {
   assert.equal(assetName('1.2.0', 'win32', 'x64'), 'QuarkTimedSync-1.2.0-Windows-x64-portable.zip');
   assert(newer('v1.10.0', '1.9.9')); assert(!newer('v1.1.0', '1.1.0')); assert(!newer('1.0.9', '1.1.0'));
   for (const key of Object.keys(TARGETS)) {
@@ -58,6 +58,25 @@ test('stable versions compare numerically and releases select all five native as
     data.assets[0].browser_download_url = 'https://example.com/update.zip';
     assert.throws(() => releaseAsset(data, '1.1.0', platform, arch), /完整更新包/);
   }
+});
+
+test('both Mac CPUs select, validate and resume the same Universal update while legacy native releases remain supported', async t => {
+  const root = await temporary(t), source = path.join(root, 'source'), spec = await payload(source, '1.3.0', 'darwin', 'universal');
+  const layout = await readLayout(source, 'darwin', 'arm64', '1.3.0'); await readLayout(source, 'darwin', 'x64', '1.3.0');
+  const prefix = spec.folder + '/' + PRODUCT + '.app';
+  const entries = await Promise.all(layout.files.map(async name => ({ name: prefix + '/' + name, content: await fs.readFile(path.join(source, name)) })));
+  const archive = zip(entries), metadata = release('1.3.0', 'darwin', 'universal', archive.length);
+  const fetcher = async url => new Response(url === RELEASES ? JSON.stringify(metadata) : url.endsWith('.sha256') ? crypto.createHash('sha256').update(archive).digest('hex') + '  ' + metadata.assets[0].name : archive);
+  for (const arch of ['arm64', 'x64']) {
+    assert.equal(releaseAsset(metadata, '1.2.0', 'darwin', arch).packageArch, 'universal');
+    assert.equal(releaseAsset(release('1.3.0', 'darwin', arch), '1.2.0', 'darwin', arch).packageArch, arch);
+    const options = { dataDir: path.join(root, arch), version: '1.2.0', platform: 'darwin', arch, execPath: path.join(source, spec.executable), packaged: true, fetcher };
+    const updater = new Updater(options); await updater.init(); await updater.check(); assert.equal(updater.state.phase, 'ready');
+    const resumed = new Updater(options); await resumed.init(); assert.equal(resumed.state.phase, 'ready'); assert.equal(resumed.ready.packageArch, 'universal');
+    assert.equal((await readLayout(resumed.ready.payload, 'darwin', arch, '1.3.0')).arch, 'universal');
+  }
+  const invalid = { ...layout, architectures: ['arm64'] }; await fs.writeFile(path.join(source, spec.manifest), JSON.stringify(invalid));
+  await assert.rejects(() => readLayout(source, 'darwin', 'x64', '1.3.0'), /芯片信息不匹配/);
 });
 
 test('GitHub download redirects cannot leave the allowed HTTPS hosts', async () => {

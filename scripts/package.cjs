@@ -8,7 +8,7 @@ const root = path.join(__dirname, '..');
 const { target, assetName } = require('../src/platforms.cjs');
 const { writeLayout } = require('../src/update-layout.cjs');
 async function main() {
-  const platform = process.platform, arch = process.arch, version = require('../package.json').version;
+  const platform = process.platform, arch = process.env.ARCHIVE_BUILD_ARCH || (platform === 'darwin' ? 'universal' : process.arch), version = require('../package.json').version;
   target(platform, arch);
   const name = require('../package.json').productName;
   const vendor = path.join(root, 'vendor', `${platform}-${arch}`);
@@ -22,6 +22,7 @@ async function main() {
     ignore: [/^\/out(?:\/|$)/, /^\/vendor(?:\/|$)/, /^\/test(?:\/|$)/, /^\/test-output(?:\/|$)/,
       /^\/scripts(?:\/|$)/, /^\/\.runtime(?:\/|$)/, /^\/\.git(?:\/|$)/, /^\/package-lock\.json$/],
     extraResource: [vendor],
+    ...(arch === 'universal' ? { osxUniversal: { x64ArchFiles: 'Contents/Resources/darwin-universal/*' } } : {}),
     ...(platform === 'darwin' ? { extendInfo: { LSMinimumSystemVersion: '12.0', NSHighResolutionCapable: true,
       NSDownloadsFolderUsageDescription: '将订阅中的新增文件下载到您选择的文件夹。',
       NSDocumentsFolderUsageDescription: '将订阅中的新增文件下载到您选择的文件夹。' } } : {})

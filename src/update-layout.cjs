@@ -28,7 +28,9 @@ async function inventory(root) {
 async function readLayout(root, platform, arch, version) {
   const spec = target(platform, arch);
   const data = JSON.parse(await fs.readFile(path.join(root, spec.manifest), 'utf8'));
-  if (data.schema !== 1 || data.appId !== APP_ID || data.platform !== platform || data.arch !== arch || data.version !== version || data.executable !== spec.executable || !Array.isArray(data.files)) throw new Error('更新包的应用、版本或芯片信息不匹配');
+  const universal = platform === 'darwin' && data.arch === 'universal' && ['x64', 'arm64', 'universal'].includes(arch)
+    && Array.isArray(data.architectures) && data.architectures.length === 2 && data.architectures.includes('x64') && data.architectures.includes('arm64');
+  if (data.schema !== 1 || data.appId !== APP_ID || data.platform !== platform || !(universal || (data.arch === arch && arch !== 'universal')) || data.version !== version || data.executable !== spec.executable || !Array.isArray(data.files)) throw new Error('更新包的应用、版本或芯片信息不匹配');
   const listed = new Set(data.files.map(relativeFile));
   if (!listed.has(spec.executable) || !listed.has(spec.manifest)) throw new Error('更新包清单不完整');
   const actual = await inventory(root);
@@ -39,7 +41,7 @@ async function writeLayout(root, platform, arch, version) {
   const spec = target(platform, arch), file = path.join(root, spec.manifest);
   await fs.mkdir(path.dirname(file), { recursive: true });
   await fs.writeFile(file, '{}');
-  const data = { schema: 1, appId: APP_ID, platform, arch, version, executable: spec.executable, files: await inventory(root) };
+  const data = { schema: 1, appId: APP_ID, platform, arch, ...(arch === 'universal' ? { architectures: ['x64', 'arm64'] } : {}), version, executable: spec.executable, files: await inventory(root) };
   await fs.writeFile(file, JSON.stringify(data, null, 2)); return data;
 }
 function validatePlan(plan) {

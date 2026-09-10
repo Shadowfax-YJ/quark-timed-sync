@@ -15,11 +15,8 @@ jobs:
       matrix:
         include:
           - os: macos-15
-            name: macOS-AppleSilicon
+            name: macOS-Universal
             arch: arm64
-          - os: macos-15-intel
-            name: macOS-Intel
-            arch: x64
           - os: windows-latest
             name: Windows-x64
             arch: x64
@@ -30,7 +27,7 @@ jobs:
             name: Linux-ARM64
             arch: arm64
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -62,7 +59,7 @@ jobs:
         run: |
           export ARCHIVE_TEST_DATA_DIR="$RUNNER_TEMP/quark-sync-smoke"
           export ARCHIVE_SMOKE_OUTPUT="$GITHUB_WORKSPACE/test-output/mac-smoke.png"
-          "out/夸克网盘定时同步-darwin-${{ matrix.arch }}/夸克网盘定时同步.app/Contents/MacOS/夸克网盘定时同步" --smoke-test
+          "out/夸克网盘定时同步-darwin-universal/夸克网盘定时同步.app/Contents/MacOS/夸克网盘定时同步" --smoke-test
           cat test-output/smoke-result.json
       - name: Verify packaged Windows application and autostart
         if: runner.os == 'Windows'
@@ -95,3 +92,45 @@ jobs:
             test-output/*.json
           retention-days: 14
           compression-level: 0
+  verify-universal:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            arch: arm64
+          - os: macos-15-intel
+            arch: x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - uses: actions/download-artifact@v4
+        with:
+          name: QuarkTimedSync-macOS-Universal
+          path: portable
+      - name: Verify the same Universal ZIP on each native CPU
+        run: |
+          node -e "if (process.arch !== '${{ matrix.arch }}') process.exit(1)"
+          cd portable/out
+          shasum -a 256 -c *.sha256
+          cd ../..
+          node scripts/verify-universal.cjs portable/out test-output/universal-extracted
+          export ARCHIVE_TEST_DATA_DIR="$RUNNER_TEMP/quark-universal-smoke"
+          export ARCHIVE_SMOKE_OUTPUT="$GITHUB_WORKSPACE/test-output/universal-${{ matrix.arch }}.png"
+          "test-output/universal-extracted/夸克网盘定时同步-darwin-universal/夸克网盘定时同步.app/Contents/MacOS/夸克网盘定时同步" --smoke-test
+          cat test-output/smoke-result.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Universal-verified-${{ matrix.arch }}
+          path: |
+            test-output/*.png
+            test-output/*.json
+          retention-days: 14

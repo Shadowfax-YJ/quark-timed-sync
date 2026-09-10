@@ -6,11 +6,12 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <title>夸克网盘定时同步</title>
   <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="logs.css">
 </head>
 <body>
   <aside>
     <div class="brand"><img src="../../assets/icon.png" alt=""><div>夸克网盘定时同步<span>让新增文件自己到达</span></div></div>
-    <div class="nav active"><span>▤</span> 下载订阅</div>
+    <nav aria-label="主导航"><button id="nav-subscriptions" class="nav active" aria-current="page"><span aria-hidden="true">▤</span> 下载订阅</button><button id="nav-logs" class="nav"><span aria-hidden="true">≡</span> 日志</button></nav>
     <div class="sidebar-bottom">
       <div class="connection"><i id="account-dot"></i><span id="account-status">检查登录状态</span></div>
       <button id="account-button" class="subtle full">登录夸克网盘</button>
@@ -23,6 +24,7 @@
     </div>
   </aside>
   <main>
+    <section id="subscriptions-view">
     <header><div><div class="eyebrow">夸克网盘 · 自动下载</div><h1>夸克网盘定时同步</h1><p>选好来源，新增文件会自动保存到你的电脑。</p></div><button id="global-pause" class="subtle">暂停全部</button></header>
     <div class="summary"><span class="live-dot"></span><span id="overall">准备好接收新文件</span><span class="summary-right">只追加 · 已有文件跳过</span></div>
     <div class="section-heading"><h2>我的订阅 <span id="count">0</span></h2><button id="add-subscription" class="primary">＋ 添加订阅</button></div>
@@ -34,8 +36,36 @@
       <div class="steps"><span>01 扫码登录</span><b>→</b><span>02 选择来源</span><b>→</b><span>03 选择本地目录</span></div>
     </section>
     <footer>关闭窗口会留在托盘运行；选择“退出并停止下载”会停止全部任务。</footer>
+    </section>
+    <section id="logs-view" hidden>
+      <header><div><div class="eyebrow">运行记录 · 本机保存</div><h1>日志</h1><p>查看订阅检查、文件下载和应用运行情况。</p></div><button id="log-settings" class="subtle">日志设置</button></header>
+      <div class="log-overview"><span id="log-live-state" class="log-live">● 实时刷新</span><span id="log-stats">正在读取日志…</span><button id="log-live" class="subtle" aria-pressed="true">暂停刷新</button><button id="log-refresh" class="subtle">刷新</button></div>
+      <div class="log-filters">
+        <label class="log-search">搜索<input id="log-search" type="search" maxlength="200" placeholder="搜索消息、文件名或详情"></label>
+        <label>级别<select id="log-level"><option value="">全部级别</option><option value="error">错误 · ERROR</option><option value="warn">警告 · WARN</option><option value="info">信息 · INFO</option><option value="debug">调试 · DEBUG</option></select></label>
+        <label>来源<select id="log-source"><option value="">全部来源</option><option value="subscription">订阅</option><option value="download">下载</option><option value="transfer">转存</option><option value="account">账号</option><option value="updater">软件更新</option><option value="service">内置服务</option><option value="app">应用</option></select></label>
+        <label>订阅<select id="log-job"><option value="">全部订阅</option></select></label>
+        <label>时间<select id="log-range"><option value="">全部保留日志</option><option value="1">最近 1 小时</option><option value="24">最近 24 小时</option><option value="168">最近 7 天</option><option value="custom">自定义范围</option></select></label>
+        <div id="log-custom-range" class="log-date-range" hidden><label>开始时间<input id="log-from" type="datetime-local"></label><label>结束时间<input id="log-to" type="datetime-local"></label></div>
+      </div>
+      <div class="log-toolbar"><span id="log-result" role="status"></span><button id="log-reset" class="text-button">重置筛选</button><div class="log-export"><select id="log-export-format" aria-label="导出格式"><option value="text">文本 TXT</option><option value="jsonl">JSONL</option></select><button id="log-export" class="subtle">导出筛选结果</button></div></div>
+      <p id="log-warning" class="log-warning" role="alert" hidden></p>
+      <div class="log-table-wrap"><table class="log-table"><thead><tr><th>时间</th><th>级别</th><th>来源 / 订阅</th><th>消息</th><th><span class="sr-only">详情</span></th></tr></thead><tbody id="log-rows"></tbody></table><div id="log-empty" class="log-empty" hidden>没有符合筛选条件的日志</div></div>
+      <div class="log-pagination"><span id="log-page"></span><button id="log-prev" class="subtle">上一页</button><button id="log-next" class="subtle">下一页</button></div>
+      <footer class="log-footer"><span id="log-retention"></span><button id="log-open" class="text-button">打开日志目录</button><button id="log-clear" class="danger-text">清空日志</button></footer>
+    </section>
   </main>
   <div id="toast" role="status" hidden></div>
+  <dialog id="log-detail-dialog" class="log-detail-dialog"><div class="dialog-heading"><h2>日志详情</h2><button id="log-detail-close" class="icon-button" aria-label="关闭日志详情">×</button></div><pre id="log-detail-content"></pre><div class="dialog-actions"><button id="log-detail-copy" class="primary">复制详情</button></div></dialog>
+  <dialog id="log-settings-dialog">
+    <div class="dialog-heading"><h2>日志设置</h2><button id="log-settings-close" class="icon-button" aria-label="关闭日志设置">×</button></div>
+    <label class="field">记录级别<select id="log-record-level"><option value="info">信息及以上（推荐）</option><option value="debug">调试及以上（排查问题时使用）</option><option value="warn">警告及以上</option><option value="error">仅错误</option></select></label>
+    <label class="field">保留天数（1～90 天）<input id="log-days" type="number" min="1" max="90" value="14"></label>
+    <label class="field">日志总大小上限（1～100 MB）<input id="log-max-mb" type="number" min="1" max="100" value="25"></label>
+    <p class="help">按日期和文件大小自动轮转，超出限制时清理最旧的记录。级别调整只影响之后的记录。日志中会隐藏登录凭据与链接签名；文件名和本地路径可能出现在详情中。</p>
+    <div class="dialog-actions"><button id="log-settings-save" class="primary">保存设置</button></div>
+  </dialog>
+  <dialog id="log-clear-dialog"><h2>清空全部日志？</h2><p>删除本机保存的全部运行日志，之后继续记录。订阅、登录信息和已下载文件会保留。</p><div class="dialog-actions"><button id="log-clear-cancel" class="subtle">取消</button><button id="log-clear-confirm" class="primary">清空日志</button></div></dialog>
   <dialog id="updates-dialog">
     <div class="dialog-heading"><h2>软件更新</h2><button id="close-updates" class="icon-button" aria-label="关闭">×</button></div>
     <p class="muted">从本项目的 GitHub Releases 获取适合当前系统和芯片的正式版。</p>
@@ -83,5 +113,6 @@
     <div class="dialog-actions"><button id="cancel-remove" class="subtle">取消</button><button id="confirm-remove" class="primary">移除订阅</button></div>
   </dialog>
   <script src="app.js"></script>
+  <script src="logs.js"></script>
 </body>
 </html>

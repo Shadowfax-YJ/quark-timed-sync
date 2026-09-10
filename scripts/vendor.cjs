@@ -17,8 +17,7 @@ async function findFile(dir, name) {
     else if (entry.name === name) return file;
   }
 }
-async function main() {
-  const platform = process.platform, arch = process.arch;
+async function prepare(platform, arch) {
   require('../src/platforms.cjs').target(platform, arch);
   const osName = platform === 'win32' ? 'windows' : platform, cpu = arch === 'x64' ? 'amd64' : 'arm64';
   const destination = path.join(root, 'vendor', `${platform}-${arch}`);
@@ -39,11 +38,12 @@ async function main() {
     if (platform === 'darwin' && item.name === 'rclone') {
       // The upstream macOS binary was linked with a newer deployment target.
       // Build the unchanged pinned module without cgo for macOS 12 support.
-      execFileSync('go', ['install', '-trimpath', '-ldflags', `-s -w -X github.com/rclone/rclone/fs.Version=v${versions.rclone}`,
-        `github.com/rclone/rclone@v${versions.rclone}`], {
-        stdio: 'inherit', env: { ...process.env, CGO_ENABLED: '0', MACOSX_DEPLOYMENT_TARGET: '12.0',
-          GOTOOLCHAIN: 'local', GOSUMDB: 'sum.golang.org', GOBIN: destination }
-      });
+      const env = { ...process.env, CGO_ENABLED: '0', MACOSX_DEPLOYMENT_TARGET: '12.0',
+        GOTOOLCHAIN: 'local', GOSUMDB: 'sum.golang.org', GOOS: 'darwin', GOARCH: cpu };
+      const module = JSON.parse(execFileSync('go', ['mod', 'download', '-json', `github.com/rclone/rclone@v${versions.rclone}`], { encoding: 'utf8', env }));
+      if (module.Error || !module.Dir || !module.Sum) throw new Error('Unable to verify rclone source module');
+      execFileSync('go', ['build', '-trimpath', '-ldflags', `-s -w -X github.com/rclone/rclone/fs.Version=v${versions.rclone}`,
+        '-o', path.join(destination, 'rclone'), '.'], { cwd: module.Dir, stdio: 'inherit', env });
       console.log(`Built rclone ${versions.rclone} from checksum-verified upstream Go module for macOS 12`);
       continue;
     }
@@ -70,5 +70,18 @@ async function main() {
   await fs.writeFile(path.join(destination, 'versions.json'), JSON.stringify(versions, null, 2));
   // All archives are created beneath this unique task-owned temp directory.
   if (path.basename(scratch).startsWith('archive-vendor-')) await fs.rm(scratch, { recursive: true, force: true });
+}
+async function main() {
+  const platform = process.platform, arch = process.env.ARCHIVE_BUILD_ARCH || (platform === 'darwin' ? 'universal' : process.arch);
+  if (platform !== 'darwin' || arch !== 'universal') return prepare(platform, arch);
+  for (const cpu of ['x64', 'arm64']) await prepare(platform, cpu);
+  const destination = path.join(root, 'vendor', 'darwin-universal'); await fs.mkdir(destination, { recursive: true });
+  for (const name of ['openlist', 'rclone']) {
+    const output = path.join(destination, name);
+    execFileSync('lipo', ['-create', path.join(root, 'vendor', 'darwin-x64', name), path.join(root, 'vendor', 'darwin-arm64', name), '-output', output], { stdio: 'inherit' });
+    await fs.chmod(output, 0o755);
+    execFileSync('lipo', ['-verify_arch', 'x86_64', 'arm64', output], { stdio: 'inherit' });
+  }
+  await fs.writeFile(path.join(destination, 'versions.json'), JSON.stringify(versions, null, 2));
 }
 main().catch(err => { console.error(err.message); process.exitCode = 1; });

@@ -4,7 +4,7 @@ const APP_ID = 'local.archive.subscriptions';
 const REPOSITORY = 'Shadowfax-YJ/quark-timed-sync';
 const TARGETS = {
   'win32-x64': 'Windows-x64', 'darwin-arm64': 'macOS-AppleSilicon',
-  'darwin-x64': 'macOS-Intel', 'linux-x64': 'Linux-x64', 'linux-arm64': 'Linux-ARM64'
+  'darwin-x64': 'macOS-Intel', 'darwin-universal': 'macOS-Universal', 'linux-x64': 'Linux-x64', 'linux-arm64': 'Linux-ARM64'
 };
 function target(platform, arch) {
   const label = TARGETS[`${platform}-${arch}`];

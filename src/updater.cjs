@@ -21,7 +21,9 @@ function newer(candidate, current) {
 }
 function releaseAsset(release, current, platform, arch) {
   if (release.draft || release.prerelease || !newer(release.tag_name, current)) return null;
-  const version = versionParts(release.tag_name).join('.'), name = assetName(version, platform, arch);
+  const version = versionParts(release.tag_name).join('.');
+  const packageArch = platform === 'darwin' && release.assets?.some(x => x.name === assetName(version, platform, 'universal')) ? 'universal' : arch;
+  const name = assetName(version, platform, packageArch);
   const get = filename => {
     const asset = release.assets?.find(x => x.name === filename);
     const expected = `https://github.com/${REPOSITORY}/releases/download/${encodeURIComponent(release.tag_name)}/${encodeURIComponent(filename)}`;
@@ -30,7 +32,7 @@ function releaseAsset(release, current, platform, arch) {
   };
   const archive = get(name), checksum = get(name + '.sha256');
   if (archive.size > 2 * 1024 ** 3 || checksum.size > 8192) throw new Error('更新文件大小异常');
-  return { version, name, archive, checksum };
+  return { version, name, archive, checksum, packageArch };
 }
 function checksumValue(text, name) {
   const lines = text.trim().split(/\r?\n/);
@@ -84,7 +86,7 @@ class Updater extends EventEmitter {
     try {
       const ready = JSON.parse(await fs.readFile(path.join(this.cache, 'ready.json'), 'utf8'));
       if (/^[0-9a-f-]{36}$/.test(ready.id) && newer(ready.version, this.version)) {
-        const work = path.join(this.cache, ready.id), payload = this.payload(work);
+        const work = path.join(this.cache, ready.id), payload = this.payload(work, ready.packageArch);
         await readLayout(payload, this.platform, this.arch, ready.version);
         this.ready = { ...ready, work, payload }; this.set({ phase: 'ready', version: ready.version });
       }
@@ -100,8 +102,9 @@ class Updater extends EventEmitter {
       } catch { /* Keep unfinished updates available for recovery. */ }
     }
   }
-  payload(work) {
-    const root = path.join(work, 'extracted', target(this.platform, this.arch).folder);
+  payload(work, packageArch = this.arch) {
+    if (packageArch !== this.arch && !(this.platform === 'darwin' && packageArch === 'universal')) throw new Error('更新包芯片信息不匹配');
+    const root = path.join(work, 'extracted', target(this.platform, packageArch).folder);
     return this.platform === 'darwin' ? path.join(root, PRODUCT + '.app') : root;
   }
   enable(value) {
@@ -149,10 +152,10 @@ class Updater extends EventEmitter {
       if (size !== update.archive.size || hash.digest('hex') !== expected) throw new Error('更新包 SHA-256 校验失败，已停止更新');
       this.set({ phase: 'verifying', progress: 100 });
       await extractZip(archive, path.join(work, 'extracted'), signal);
-      const payload = this.payload(work);
+      const payload = this.payload(work, update.packageArch);
       await readLayout(payload, this.platform, this.arch, update.version); signal.throwIfAborted();
-      await fs.writeFile(path.join(this.cache, 'ready.json'), JSON.stringify({ id, version: update.version }), { mode: 0o600 });
-      this.ready = { id, version: update.version, work, payload };
+      await fs.writeFile(path.join(this.cache, 'ready.json'), JSON.stringify({ id, version: update.version, packageArch: update.packageArch }), { mode: 0o600 });
+      this.ready = { id, version: update.version, packageArch: update.packageArch, work, payload };
       this.set({ phase: 'ready' });
     } catch (error) {
       if (work && !this.ready) await removeOwned(this.cache, work).catch(() => {});

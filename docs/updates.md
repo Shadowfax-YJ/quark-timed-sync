@@ -16,7 +16,13 @@ An incoming copy is placed beside the installed app for same-volume renames. A s
 
 Release archives and checksums share the same GitHub trust boundary; they are integrity checks, not independent publisher signatures. The Mac package remains ad-hoc signed and is not Developer ID notarized. A restrictive OS policy can still prevent it from starting. Linux needs a working Chromium sandbox; an update cannot grant root ownership to a new setuid helper. Administrators must manage such requirements on systems that do not permit user namespaces.
 
-## Validation for v1.1.0
+## Universal Mac packages (v1.2.0)
+
+Mac builds now emit one `macOS-Universal` ZIP. The packager merges the x64 and arm64 Electron bundles; OpenList and the pinned rclone source builds are combined with `lipo`. Every Mach-O slice is checked for CPU identity and a deployment target no newer than macOS 12, then the complete bundle is ad-hoc signed. CI extracts the same ZIP with the updater on both native Mac runner architectures, rechecks signatures and inventory, and launches the app and embedded tools.
+
+The updater prefers Universal assets on either Mac CPU and still accepts legacy native releases. Universal manifests explicitly declare both `x64` and `arm64`; persisted downloads retain their package architecture so they resume correctly after restarting on either CPU. v1.1.0's Mac updater cannot discover the new filename, so users must manually replace their old `.app` once. Their existing profile stays in the same location.
+
+## Validation inherited from v1.1.0
 
 - Unit/integration tests exercise release selection for all five targets, corrupted downloads, cancellation, extraction boundaries, persisted downloads, installation rollback, user file preservation and Linux desktop startup files.
 - On Windows, a disposable pair of real Electron runtimes completed exit → replacement → restart → acknowledgement → recovery-copy cleanup. This test exposed and fixed Windows 8.3 path alias handling and Electron's virtual `.asar` filesystem copying.
