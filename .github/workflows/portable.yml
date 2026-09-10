@@ -44,7 +44,7 @@ jobs:
         run: |
           sudo apt-get update
           if [ '${{ matrix.os }}' = 'ubuntu-22.04' ]; then ALSA=libasound2; GTK=libgtk-3-0; else ALSA=libasound2t64; GTK=libgtk-3-0t64; fi
-          sudo apt-get install -y zip unzip xvfb dbus-x11 "$GTK" libnss3 "$ALSA" libgbm1 libsecret-1-0 libayatana-appindicator3-1
+          sudo apt-get install -y zip unzip xvfb dbus-x11 fonts-noto-cjk "$GTK" libnss3 "$ALSA" libgbm1 libsecret-1-0 libayatana-appindicator3-1
       - run: npm ci --no-audit --no-fund
       - uses: actions/setup-go@v5
         if: runner.os == 'macOS'

@@ -126,6 +126,15 @@ test('Mac UTF-8 ZIP names remain readable by the updater after packaging', async
   assert.equal(await fs.readFile(path.join(root, 'after', name), 'utf8'), 'binary');
 });
 
+test('Windows legacy ZIP separators are normalized before update extraction', async t => {
+  const root = await temporary(t), file = path.join(root, 'windows.zip');
+  await fs.writeFile(file, zip([{ name: '同步\\resources\\app.asar', content: 'application' }]));
+  await assert.rejects(() => extractZip(file, path.join(root, 'before')), /invalid characters/);
+  await require('../scripts/zip-utf8.cjs').markUtf8(file);
+  await extractZip(file, path.join(root, 'after'));
+  assert.equal(await fs.readFile(path.join(root, 'after', '同步/resources/app.asar'), 'utf8'), 'application');
+});
+
 test('disabling automatic updates aborts the active request', async t => {
   const dataDir = await temporary(t); let aborted = false;
   const updater = new Updater({ dataDir, version: '1.1.0', fetcher: (_url, { signal }) => new Promise((_resolve, reject) => {

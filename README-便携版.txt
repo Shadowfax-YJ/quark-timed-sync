@@ -56,7 +56,7 @@ macOS 首次打开
 不需要关闭 Gatekeeper、杀毒软件或任何全局系统防护。
 
 Linux 桌面要求
-需要 GTK 3、NSS、ALSA、GBM、系统密钥环和 Chromium 可用的沙箱环境；不支持无桌面的服务器。
+需要 GTK 3、NSS、ALSA、GBM、系统密钥环、支持中文的字体（如 Noto CJK）和 Chromium 可用的沙箱环境；不支持无桌面的服务器。
 登录信息保存需要 GNOME Keyring 或 KWallet。程序拒绝使用明文后备密钥。
 GNOME 桌面显示托盘可能需要 AppIndicator 支持。
 部分发行版限制非特权用户命名空间，需由管理员按发行版规则配置 Chromium 沙箱；程序不会自动关闭沙箱。
