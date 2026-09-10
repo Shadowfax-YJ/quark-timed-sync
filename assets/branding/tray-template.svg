@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <mask id="face">
+      <rect width="64" height="64" fill="white"/>
+      <path d="M18 19L16 11L24 21ZM40 21L48 11L46 19Z" fill="black"/>
+      <path d="M25 23L21 27L25 30M35 22L31 26L35 29M45 23L41 27L45 30" fill="none" stroke="black" stroke-width="3"/>
+      <path d="M24 39V43M40 39V43M29 49Q32 51 35 49" fill="none" stroke="black" stroke-width="3.5" stroke-linecap="round"/>
+    </mask>
+  </defs>
+  <path mask="url(#face)" fill="black" d="M14 25L10 3Q23 7 28 18Q32 17 36 18Q41 7 54 3L50 25Q61 28 57 40Q52 48 58 57Q45 63 42 52Q32 60 22 52Q19 63 6 57Q12 48 7 40Q3 28 14 25Z"/>
+</svg>

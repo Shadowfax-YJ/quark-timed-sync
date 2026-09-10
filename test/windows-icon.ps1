@@ -1,6 +1,20 @@
-param([Parameter(Mandatory=$true)][long]$WindowHandle)
+param(
+    [Parameter(Mandatory=$true)][long]$WindowHandle,
+    [string]$ReferenceIcon
+)
 $ErrorActionPreference = 'Stop'
+if (!$ReferenceIcon) { $ReferenceIcon = Join-Path $PSScriptRoot '..\assets\icon.ico' }
 Add-Type -AssemblyName System.Drawing
+# Decode the embedded PNG directly: .NET Framework Icon.ToBitmap can misread
+# PNG-compressed ICO frames even when Windows loads the same ICO correctly.
+$iconData = [IO.File]::ReadAllBytes((Resolve-Path -LiteralPath $ReferenceIcon).Path)
+$frames = @{}
+for ($i=0; $i -lt [BitConverter]::ToUInt16($iconData, 4); $i++) {
+    $entry = 6 + 16 * $i
+    $width = if ($iconData[$entry] -eq 0) { 256 } else { [int]$iconData[$entry] }
+    $height = if ($iconData[$entry+1] -eq 0) { 256 } else { [int]$iconData[$entry+1] }
+    $frames["${width}x${height}"] = @([BitConverter]::ToUInt32($iconData, $entry+12), [BitConverter]::ToUInt32($iconData, $entry+8))
+}
 Add-Type @'
 using System;
 using System.Runtime.InteropServices;
@@ -20,16 +34,28 @@ foreach ($kind in @('small', 'large')) {
         if ($bitmap.Width -gt 256 -or $bitmap.Height -gt 256) {
             throw "$kind taskbar/window icon is $($bitmap.Width)x$($bitmap.Height); use a Windows-sized ICO instead of the full-size PNG"
         }
-        $green = 0; $opaque = 0
-        for ($y=0; $y -lt $bitmap.Height; $y++) { for ($x=0; $x -lt $bitmap.Width; $x++) {
-            $pixel = $bitmap.GetPixel($x,$y)
-            if ($pixel.A -gt 127) {
-                $opaque++
-                if ($pixel.G -gt ($pixel.R+40) -and $pixel.G -gt ($pixel.B+5)) { $green++ }
+        $frame = $frames["$($bitmap.Width)x$($bitmap.Height)"]
+        if (!$frame) { throw "$kind icon dimensions do not match an available application ICO frame" }
+        $stream = [IO.MemoryStream]::new($iconData, [int]$frame[0], [int]$frame[1], $false)
+        $expected = [Drawing.Bitmap]::new($stream)
+        try {
+            if ($expected.Width -ne $bitmap.Width -or $expected.Height -ne $bitmap.Height) {
+                throw "$kind icon dimensions do not match an available application ICO frame"
             }
-        } }
-        if ($opaque -eq 0 -or $green / $opaque -lt 0.6) { throw "$kind icon does not contain the application's green download mark" }
-        $checks += [pscustomobject]@{Kind=$kind; Width=$bitmap.Width; Height=$bitmap.Height; Branded=$true}
+            $opaque = 0; $difference = 0.0
+            for ($y=0; $y -lt $bitmap.Height; $y++) { for ($x=0; $x -lt $bitmap.Width; $x++) {
+                $pixel = $bitmap.GetPixel($x,$y); $target = $expected.GetPixel($x,$y)
+                if ($pixel.A -gt 127) { $opaque++ }
+                # Compare premultiplied pixels so transparent RGB does not affect the result.
+                $difference += [Math]::Abs($pixel.A - $target.A)
+                foreach ($channel in @('R', 'G', 'B')) {
+                    $difference += [Math]::Abs(($pixel.$channel * $pixel.A - $target.$channel * $target.A) / 255.0)
+                }
+            } }
+            $meanError = $difference / (4 * $bitmap.Width * $bitmap.Height)
+            if ($opaque -eq 0 -or $meanError -gt 8) { throw "$kind icon differs from the application's ICO artwork (mean pixel error $meanError)" }
+            $checks += [pscustomobject]@{Kind=$kind; Width=$bitmap.Width; Height=$bitmap.Height; Branded=$true; MeanPixelError=$meanError}
+        } finally { $expected.Dispose(); $stream.Dispose() }
     } finally { $bitmap.Dispose() }
 }
 $checks | ConvertTo-Json -Compress

@@ -10,6 +10,7 @@
     "start": "electron .",
     "test": "node --test test/*.test.cjs",
     "vendor": "node scripts/vendor.cjs",
+    "icons": "node scripts/icons.cjs",
     "package": "node scripts/package.cjs",
     "smoke": "electron . --smoke-test"
   },
@@ -19,7 +20,8 @@
   },
   "devDependencies": {
     "@electron/packager": "20.3.0",
-    "electron": "43.6.0"
+    "electron": "43.6.0",
+    "sharp": "0.34.5"
   },
   "repository": {
     "type": "git",

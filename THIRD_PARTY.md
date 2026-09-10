@@ -11,3 +11,7 @@ OpenList and rclone run as separate local processes. Downloaded release archives
 The Quark connector implements the web protocol. It does not include the quark-auto-save application or its plugins. Reference documentation: https://github.com/Cp0204/quark-auto-save/wiki/插件配置 .
 
 Full license copies for the two standalone tools are in the adjacent `licenses` directory.
+
+## Artwork
+
+The app icon is AI-assisted fan artwork of Arknights character 予愿安洁莉娜 (Angelina the Mellow Wish). Arknights and its characters belong to their respective rights holders; the application's MIT code license does not grant rights to those characters. The chibi picture-frame composition takes stylistic inspiration from MAA, without distributing its logo or the official character reference images. References, editable tray artwork and generation prompts are documented in [assets/branding/README.md](assets/branding/README.md). This project is not affiliated with Arknights, MAA or Quark.

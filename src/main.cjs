@@ -269,6 +269,7 @@ async function smokeTest() {
   await delay(500);
   const evaluate = script => window.webContents.executeJavaScript(script);
   const assert = (ok, text) => { if (!ok) throw new Error(text); };
+  assert(tray && !tray.isDestroyed(), 'system tray icon was not created');
   assert(await evaluate("document.querySelector('h1').textContent === '夸克网盘定时同步'"), 'application name not rendered');
   if (testStartup) {
     await evaluate("document.querySelector('#autostart').click()");
@@ -317,7 +318,7 @@ async function smokeTest() {
   const output = process.env.ARCHIVE_SMOKE_OUTPUT || path.join(dataDir, 'smoke.png');
   await fs.mkdir(path.dirname(output), { recursive: true }); await fs.writeFile(output, png.toPNG());
   assert(errors.length === 0, 'renderer error: ' + errors.join('; '));
-  await atomicJson(path.join(path.dirname(output), 'smoke-result.json'), { ok: true, platform: process.platform, arch: process.arch, version: app.getVersion(), checks: ['packaged rclone', 'packaged OpenList startup and shutdown', 'render', 'folder picker', 'drive subscription', 'pause persistence', 'share parsing', 'share subfolder', ...(iconCheck ? ['Windows native taskbar icon size and branding'] : []), ...(testStartup ? ['Windows autostart enable, reload, disable'] : [])], screenshot: path.basename(output) });
+  await atomicJson(path.join(path.dirname(output), 'smoke-result.json'), { ok: true, platform: process.platform, arch: process.arch, version: app.getVersion(), checks: ['packaged rclone', 'packaged OpenList startup and shutdown', 'render', 'system tray icon', 'folder picker', 'drive subscription', 'pause persistence', 'share parsing', 'share subfolder', ...(iconCheck ? ['Windows native taskbar icon size and branding'] : []), ...(testStartup ? ['Windows autostart enable, reload, disable'] : [])], screenshot: path.basename(output) });
   await quit();
 }
 
@@ -349,9 +350,14 @@ else {
       { label: '编辑', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] }
     ]) : null);
     try {
-      const icon = nativeImage.createFromPath(path.join(assets, process.platform === 'darwin' ? 'trayTemplate.png' : 'icon.png'));
-      if (process.platform === 'darwin') icon.setTemplateImage(true);
-      tray = new Tray(icon.resize({ width: process.platform === 'darwin' ? 18 : 24, height: process.platform === 'darwin' ? 18 : 24 }));
+      if (process.platform === 'win32') {
+        // Let Windows select the ICO frame for the current taskbar DPI.
+        tray = new Tray(path.join(assets, 'tray.ico'));
+      } else {
+        const icon = nativeImage.createFromPath(path.join(assets, process.platform === 'darwin' ? 'trayTemplate.png' : 'tray.png'));
+        if (process.platform === 'darwin') icon.setTemplateImage(true);
+        tray = new Tray(icon);
+      }
       tray.on('click', show);
     } catch {}
     if (smoke) loggedIn = true;

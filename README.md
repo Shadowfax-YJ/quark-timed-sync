@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/icon.png" width="160" height="160" alt="予愿安洁莉娜主题应用图标"></p>
+
 # 夸克网盘定时同步
 
 一个用于夸克网盘的开源桌面工具：定时检查网盘文件夹或分享链接，把新增文件自动下载到本地，保持原有目录结构。
@@ -80,6 +82,8 @@ npm run smoke
 Windows 还可使用 `npm run smoke -- --test-startup`，验证真实系统启动项的开启、界面重载后状态读取和关闭。该测试使用临时身份和数据目录，并在结束时移除测试启动项。
 
 GitHub Actions 会在 Windows 与 macOS Apple Silicon 上构建、运行测试并验证打包后的应用。
+
+图标采用予愿安洁莉娜主题，应用与任务栏使用完整插画，托盘使用简化头像，Mac 菜单栏使用随系统明暗变化的单色版。设计来源和素材导出方法见 [图标说明](assets/branding/README.md)。执行 `npm run icons` 可重新导出图标，不会构建应用安装包。
 
 ## 验证范围
 
