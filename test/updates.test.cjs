@@ -150,7 +150,9 @@ test('unmanaged user files, wrong architecture and unsafe plans stop before repl
   await fs.writeFile(path.join(plan.installRoot, 'my-document.txt'), 'preserve');
   await assert.rejects(() => applyUpdate(plan, async () => {}), /额外文件/);
   assert.equal(await fs.readFile(path.join(plan.installRoot, 'my-document.txt'), 'utf8'), 'preserve');
-  await assert.rejects(() => readLayout(plan.incoming, 'darwin', 'x64', '1.2.0'));
+  // Always choose a different CPU; darwin/x64 is valid on an Intel Mac runner.
+  const wrongArch = plan.arch === 'x64' ? 'arm64' : 'x64';
+  await assert.rejects(() => readLayout(plan.incoming, plan.platform, wrongArch, '1.2.0'));
   assert.throws(() => validatePlan({ ...plan, backup: path.dirname(plan.installRoot) }), /allowed scope/);
 });
 test('Linux login startup round-trips quoted paths and only removes its own entry', async t => {
