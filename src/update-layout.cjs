@@ -57,6 +57,6 @@ async function removeOwned(root, file) {
   const stat = await fs.lstat(file).catch(e => { if (e.code !== 'ENOENT') throw e; });
   if (!stat) return;
   if (stat.isSymbolicLink()) throw new Error('Refusing to remove an update symlink');
-  await fs.rm(file, { recursive: true, force: true });
+  await fs.rm(file, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }
 module.exports = { inside, relativeFile, inventory, readLayout, writeLayout, validatePlan, removeOwned };

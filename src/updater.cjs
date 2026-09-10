@@ -5,7 +5,7 @@ const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
 const { EventEmitter } = require('node:events');
 const { PRODUCT, REPOSITORY, target, assetName } = require('./platforms.cjs');
-const { inside, readLayout, removeOwned } = require('./update-layout.cjs');
+const { inside, inventory, readLayout, validatePlan, removeOwned } = require('./update-layout.cjs');
 const { extractZip } = require('./update-zip.cjs');
 const RELEASES = `https://api.github.com/repos/${REPOSITORY}/releases/latest`;
 const PERIOD = 6 * 60 * 60 * 1000;
@@ -63,9 +63,38 @@ async function limitedText(response, limit) {
   return Buffer.concat(chunks).toString('utf8');
 }
 function alive(pid) { try { process.kill(pid, 0); return true; } catch (e) { return e.code !== 'ESRCH'; } }
+async function statIfExists(file) { return fs.lstat(file).catch(error => { if (error.code !== 'ENOENT') throw error; return null; }); }
+async function recoverStaging(plan, layout) {
+  const previous = await fs.readFile(path.join(plan.work, 'plan.json'), 'utf8').then(JSON.parse).catch(error => {
+    if (error.code === 'ENOENT') return null;
+    throw new Error('无法读取上次更新计划，已保留临时目录', { cause: error });
+  });
+  if (previous) {
+    validatePlan(previous);
+    for (const key of ['id', 'version', 'oldVersion', 'platform', 'arch', 'installRoot', 'incoming', 'backup', 'work']) {
+      if (previous[key] !== plan[key]) throw new Error('此更新已由另一程序目录准备，请从原目录打开程序后重试');
+    }
+  }
+  if (await statIfExists(plan.backup)) throw new Error('上次更新的恢复目录仍在，已保留原程序，请先完成恢复再重试');
+  const staged = await statIfExists(plan.incoming);
+  if (!staged) return;
+  if (!staged.isDirectory() || staged.isSymbolicLink()) throw new Error('更新临时目录被其他文件或链接占用');
+  if (!previous) {
+    // Older versions could stop after mkdir, before recording ownership. Only
+    // remove an empty directory in that case; never adopt arbitrary contents.
+    try { await fs.rmdir(plan.incoming); }
+    catch (error) { throw new Error('无法确认更新临时目录的归属，已保留其中内容', { cause: error }); }
+    return;
+  }
+  // A crash may leave only part of the payload. Every remaining file must still
+  // belong to that exact downloaded package before a retry may discard it.
+  const expected = new Set(layout.files);
+  if ((await inventory(plan.incoming)).some(file => !expected.has(file))) throw new Error('更新临时目录中有额外文件，已保留其中内容');
+  await removeOwned(path.dirname(plan.incoming), plan.incoming);
+}
 class Updater extends EventEmitter {
-  constructor({ dataDir, version, platform = process.platform, arch = process.arch, execPath = process.execPath, packaged = false, fetcher = fetch }) {
-    super(); Object.assign(this, { version, platform, arch, execPath, packaged, fetcher });
+  constructor({ dataDir, version, platform = process.platform, arch = process.arch, execPath = process.execPath, packaged = false, fetcher = fetch, spawnWorker = spawn }) {
+    super(); Object.assign(this, { version, platform, arch, execPath, packaged, fetcher, spawnWorker });
     this.cache = path.join(dataDir, 'updates');
     this.installRoot = platform === 'darwin' ? path.resolve(path.dirname(execPath), '..', '..') : path.dirname(execPath);
     this.state = { phase: 'idle', version: '', progress: 0, error: '', packaged };
@@ -166,26 +195,34 @@ class Updater extends EventEmitter {
   async prepareInstall(protectedDirectories = []) {
     if (!this.packaged || !this.ready) throw new Error('尚无可安装的更新');
     const { id, version, work, payload } = this.ready;
-    for (const dir of [this.cache, ...protectedDirectories]) {
-      const resolved = await fs.realpath(dir).catch(() => path.resolve(dir));
-      if (resolved === this.installRoot || inside(this.installRoot, resolved) || inside(resolved, this.installRoot)) throw new Error('程序目录与订阅或配置目录重叠，请先将程序移至独立目录');
-    }
-    await readLayout(this.installRoot, this.platform, this.arch, this.version);
-    await readLayout(payload, this.platform, this.arch, version);
-    const previousWorker = await fs.readFile(path.join(work, 'worker-ready'), 'utf8').then(JSON.parse).catch(() => null);
-    if (previousWorker?.pid && alive(previousWorker.pid)) {
-      await fs.writeFile(path.join(work, 'cancel'), 'cancel');
-      for (let i = 0; i < 80 && alive(previousWorker.pid); i++) await sleep(100);
-      if (alive(previousWorker.pid)) throw new Error('上次更新助手仍在退出，请稍后重试');
-    }
-    for (const name of ['cancel', 'worker-ready', 'boot-ok', 'status.json']) await fs.unlink(path.join(work, name)).catch(e => { if (e.code !== 'ENOENT') throw e; });
     const parent = path.dirname(this.installRoot), incoming = path.join(parent, '.quark-update-next-' + id), backup = path.join(parent, '.quark-update-previous-' + id);
-    // Also tests write permission without touching the running app.
-    await fs.mkdir(incoming).catch(error => {
-      if (['EACCES', 'EPERM', 'EROFS'].includes(error.code)) throw new Error('程序目录不可写，请将程序移至当前用户可写的独立文件夹后再更新');
-      throw error;
-    });
+    const plan = { id, version, oldVersion: this.version, platform: this.platform, arch: this.arch, parentPid: process.pid, installRoot: this.installRoot, incoming, backup, work };
+    let staged = false, planned = false;
     try {
+      validatePlan(plan);
+      for (const dir of [this.cache, ...protectedDirectories]) {
+        const resolved = await fs.realpath(dir).catch(() => path.resolve(dir));
+        if ([this.installRoot, incoming, backup].some(root => resolved === root || inside(root, resolved) || inside(resolved, root))) throw new Error('程序或更新临时目录与订阅或配置目录重叠，请先将程序移至独立目录');
+      }
+      await readLayout(this.installRoot, this.platform, this.arch, this.version);
+      const layout = await readLayout(payload, this.platform, this.arch, version);
+      const previousWorker = await fs.readFile(path.join(work, 'worker-ready'), 'utf8').then(JSON.parse).catch(() => null);
+      if (previousWorker?.pid && alive(previousWorker.pid)) {
+        await fs.writeFile(path.join(work, 'cancel'), 'cancel');
+        for (let i = 0; i < 80 && alive(previousWorker.pid); i++) await sleep(100);
+        if (alive(previousWorker.pid)) throw new Error('上次更新助手仍在退出，请稍后重试');
+      }
+      await recoverStaging(plan, layout);
+      // Record ownership before creating anything beside the running app. Failed
+      // and interrupted copies can then be recovered without discarding user files.
+      await fs.writeFile(path.join(work, 'plan.json'), JSON.stringify(plan), { mode: 0o600 }); planned = true;
+      for (const name of ['cancel', 'worker-ready', 'boot-ok', 'status.json']) await fs.unlink(path.join(work, name)).catch(e => { if (e.code !== 'ENOENT') throw e; });
+      // Also tests write permission without touching the running app.
+      await fs.mkdir(incoming).catch(error => {
+        if (['EACCES', 'EPERM', 'EROFS'].includes(error.code)) throw new Error('程序目录不可写，请将程序移至当前用户可写的独立文件夹后再更新');
+        throw error;
+      });
+      staged = true;
       await fs.cp(payload, incoming, { recursive: true, verbatimSymlinks: true });
       await readLayout(incoming, this.platform, this.arch, version);
       // Use a separate Electron runtime so the helper never locks the program being replaced.
@@ -195,11 +232,11 @@ class Updater extends EventEmitter {
         const code = await require('node:fs/promises').readFile(path.join(__dirname, file));
         await fs.writeFile(path.join(work, file), code);
       }
-      const plan = { id, version, oldVersion: this.version, platform: this.platform, arch: this.arch, parentPid: process.pid, installRoot: this.installRoot, incoming, backup, work };
-      await fs.writeFile(path.join(work, 'plan.json'), JSON.stringify(plan), { mode: 0o600 });
-      this.set({ phase: 'installing' });
-      const child = spawn(path.join(runner, target(this.platform, this.arch).executable), [path.join(work, 'update-worker.cjs'), path.join(work, 'plan.json')],
-        { detached: true, windowsHide: true, stdio: 'ignore', env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } });
+      this.set({ phase: 'installing', error: '' });
+      // Windows keeps the helper's working directory open too, even though its
+      // executable is outside the app. Never inherit the directory being swapped.
+      const child = this.spawnWorker(path.join(runner, target(this.platform, this.arch).executable), [path.join(work, 'update-worker.cjs'), path.join(work, 'plan.json')],
+        { cwd: runner, detached: true, windowsHide: true, stdio: 'ignore', env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } });
       await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); }); child.unref();
       for (let retry = 0; retry < 80; retry++) {
         const ready = await fs.readFile(path.join(work, 'worker-ready'), 'utf8').then(JSON.parse).catch(() => null);
@@ -209,10 +246,12 @@ class Updater extends EventEmitter {
       await fs.writeFile(path.join(work, 'cancel'), 'cancel');
       throw new Error('更新助手没有启动，当前程序保持不变');
     } catch (error) {
-      this.set({ phase: 'ready', error: error.message });
       // The worker, if it started, sees cancellation before any directory swap.
-      await fs.writeFile(path.join(work, 'cancel'), 'cancel').catch(() => {});
-      await removeOwned(parent, incoming).catch(() => {}); throw error;
+      if (planned) await fs.writeFile(path.join(work, 'cancel'), 'cancel').catch(() => {});
+      let cleanupError;
+      if (staged) await removeOwned(parent, incoming).catch(error => { cleanupError = error; });
+      this.set({ phase: 'ready', error: error.message + (cleanupError ? '；临时目录暂被占用，下次重试会重新清理' : '') });
+      throw error;
     }
   }
 }

@@ -16,6 +16,12 @@ An incoming copy is placed beside the installed app for same-volume renames. A s
 
 Release archives and checksums share the same GitHub trust boundary; they are integrity checks, not independent publisher signatures. The Mac package remains ad-hoc signed and is not Developer ID notarized. A restrictive OS policy can still prevent it from starting. Linux needs a working Chromium sandbox; an update cannot grant root ownership to a new setuid helper. Administrators must manage such requirements on systems that do not permit user namespaces.
 
+## Retry recovery (v1.2.1)
+
+The detached helper explicitly uses its independent runtime directory as its working directory. On Windows, inheriting the installed app's working directory keeps that folder open and prevents the rename even after the app exits. The regression fixture now starts a real Electron window from its own install directory, leaves a partial staging copy, and verifies recovery through replacement, restart and acknowledgement.
+
+Preparation records its plan before creating the sibling staging directory. A retry waits for an earlier helper to stop, verifies that the plan belongs to the same download and installation, and removes only staging contents listed in the verified payload. An empty directory left before older updaters recorded a plan is recoverable as well. Unknown files, links, another installation's plan, and existing recovery copies are retained and reported instead of being overwritten. Cleanup retries brief Windows file locks; preparation failures keep the downloaded package ready for another attempt.
+
 ## Universal Mac packages (v1.2.0)
 
 Mac builds now emit one `macOS-Universal` ZIP. The packager merges the x64 and arm64 Electron bundles; OpenList and the pinned rclone source builds are combined with `lipo`. Every Mach-O slice is checked for CPU identity and a deployment target no newer than macOS 12, then the complete bundle is ad-hoc signed. CI extracts the same ZIP with the updater on both native Mac runner architectures, rechecks signatures and inventory, and launches the app and embedded tools.

@@ -169,6 +169,81 @@ async function updatePlan(t) {
     installRoot: path.join(root, 'installed'), incoming: path.join(root, '.quark-update-next-' + id), backup: path.join(root, '.quark-update-previous-' + id), work: path.join(root, 'work') };
   await payload(plan.installRoot, plan.oldVersion); await payload(plan.incoming, plan.version); return plan;
 }
+
+async function preparedUpdater(t, spawnWorker) {
+  const root = await temporary(t), installRoot = path.join(root, 'installed'), dataDir = path.join(root, 'profile');
+  const spec = await payload(installRoot, '1.1.0');
+  const updater = new Updater({ dataDir, version: '1.1.0', execPath: path.join(installRoot, spec.executable), packaged: true, spawnWorker });
+  await updater.init();
+  const id = crypto.randomUUID(), work = path.join(updater.cache, id), source = updater.payload(work);
+  await payload(source, '1.2.0'); updater.ready = { id, version: '1.2.0', work, payload: source };
+  const parent = path.dirname(updater.installRoot);
+  const plan = { id, version: '1.2.0', oldVersion: '1.1.0', platform: process.platform, arch: process.arch, parentPid: process.pid,
+    installRoot: updater.installRoot, work, incoming: path.join(parent, '.quark-update-next-' + id), backup: path.join(parent, '.quark-update-previous-' + id) };
+  return { updater, plan, spec };
+}
+
+function acknowledgedWorker(executable, args, options) {
+  assert.equal(options.cwd, path.dirname(executable).endsWith(path.join('Contents', 'MacOS'))
+    ? path.resolve(path.dirname(executable), '..', '..') : path.dirname(executable));
+  const child = new EventEmitter(); child.pid = process.pid; child.unref = () => {};
+  queueMicrotask(async () => {
+    try {
+      const plan = JSON.parse(await fs.readFile(args[1], 'utf8'));
+      assert(!inside(plan.installRoot, options.cwd)); assert.notEqual(options.cwd, plan.installRoot);
+      await fs.writeFile(path.join(plan.work, 'worker-ready'), JSON.stringify({ id: plan.id, pid: child.pid }));
+      child.emit('spawn');
+    } catch (error) { child.emit('error', error); }
+  });
+  return child;
+}
+
+test('retry recovers an interrupted partial staging copy and starts the helper outside the installed app', async t => {
+  const { updater, plan, spec } = await preparedUpdater(t, acknowledgedWorker);
+  await fs.writeFile(path.join(plan.work, 'plan.json'), JSON.stringify(plan));
+  await fs.mkdir(path.dirname(path.join(plan.incoming, spec.executable)), { recursive: true });
+  await fs.writeFile(path.join(plan.incoming, spec.executable), 'partial copy');
+  await updater.prepareInstall();
+  assert.equal(updater.state.phase, 'installing');
+  await readLayout(plan.incoming, plan.platform, plan.arch, '1.2.0');
+  await readLayout(plan.installRoot, plan.platform, plan.arch, '1.1.0');
+});
+
+test('retry recovers an empty staging directory left before the old updater wrote its plan', async t => {
+  const { updater, plan } = await preparedUpdater(t, acknowledgedWorker);
+  await fs.mkdir(plan.incoming);
+  await updater.prepareInstall();
+  await readLayout(plan.incoming, plan.platform, plan.arch, '1.2.0');
+});
+
+test('retry preserves unknown staging contents, recovery copies and another install location', async t => {
+  for (const scenario of ['unowned', 'extra-file', 'backup', 'other-install']) {
+    const { updater, plan } = await preparedUpdater(t, () => { throw new Error('worker must not launch'); });
+    if (scenario !== 'unowned') await fs.writeFile(path.join(plan.work, 'plan.json'), JSON.stringify({ ...plan,
+      ...(scenario === 'other-install' ? { installRoot: path.join(path.dirname(plan.installRoot), 'another-app') } : {}) }));
+    const dir = scenario === 'backup' ? plan.backup : plan.incoming;
+    await fs.mkdir(dir); const sentinel = path.join(dir, 'keep.txt'); await fs.writeFile(sentinel, 'keep');
+    await assert.rejects(() => updater.prepareInstall(), /临时目录|恢复目录|另一/);
+    assert.equal(await fs.readFile(sentinel, 'utf8'), 'keep');
+    assert.equal(updater.state.phase, 'ready'); assert(updater.state.error);
+    await readLayout(plan.installRoot, plan.platform, plan.arch, '1.1.0');
+  }
+});
+
+test('a failed helper launch leaves a retryable download and clears its own staging directory', async t => {
+  let fail = true;
+  const { updater, plan } = await preparedUpdater(t, (...args) => {
+    if (fail) throw new Error('fixture helper launch failed');
+    return acknowledgedWorker(...args);
+  });
+  await assert.rejects(() => updater.prepareInstall(), /fixture helper launch failed/);
+  assert.equal(updater.state.phase, 'ready');
+  await assert.rejects(() => fs.access(plan.incoming), { code: 'ENOENT' });
+  assert.equal(updater.ready.id, plan.id);
+  await readLayout(plan.installRoot, plan.platform, plan.arch, '1.1.0');
+  fail = false; await updater.prepareInstall();
+  await readLayout(plan.incoming, plan.platform, plan.arch, '1.2.0');
+});
 test('installation swaps only the application directory and retains a recovery copy', async t => {
   const plan = await updatePlan(t), outside = path.join(path.dirname(plan.installRoot), 'archive.txt');
   await fs.writeFile(outside, 'keep');
