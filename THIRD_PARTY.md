@@ -5,6 +5,7 @@
 - rclone 1.75.1 — MIT, unmodified standalone executable. https://github.com/rclone/rclone/tree/v1.75.1 ; https://github.com/rclone/rclone/blob/v1.75.1/COPYING .
 - qrcode 1.5.4 — MIT, https://github.com/soldair/node-qrcode .
 - tough-cookie 6.0.2 — BSD-3-Clause, https://github.com/salesforce/tough-cookie .
+- yauzl 3.4.0 — MIT, https://github.com/thejoshwolfe/yauzl . Used to extract verified update ZIP archives.
 
 OpenList and rclone run as separate local processes. Downloaded release archives are checked against upstream SHA-256 release digests/manifests by `scripts/vendor.cjs`. On macOS, rclone is compiled from its unchanged pinned upstream Go module with CGO_ENABLED=0 and a macOS 12 deployment target; Go verifies module checksums against sum.golang.org. Runtime npm dependencies and their license files remain in the application archive. No account credentials are included in the distribution.
 

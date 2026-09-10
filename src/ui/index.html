@@ -17,6 +17,7 @@
       <div class="divider"></div>
       <label class="toggle"><span>下载完成通知</span><input id="notifications" type="checkbox" checked></label>
       <label class="toggle"><span>登录电脑时启动</span><input id="autostart" type="checkbox"></label>
+      <button id="open-updates" class="subtle full">软件更新</button>
       <button id="quit" class="exit">退出并停止下载 ↗</button>
       <span id="version" class="version"></span>
     </div>
@@ -35,6 +36,15 @@
     <footer>关闭窗口会留在托盘运行；选择“退出并停止下载”会停止全部任务。</footer>
   </main>
   <div id="toast" role="status" hidden></div>
+  <dialog id="updates-dialog">
+    <div class="dialog-heading"><h2>软件更新</h2><button id="close-updates" class="icon-button" aria-label="关闭">×</button></div>
+    <p class="muted">从本项目的 GitHub Releases 获取适合当前系统和芯片的正式版。</p>
+    <label class="toggle"><span>自动检查并下载更新</span><input id="auto-updates" type="checkbox"></label>
+    <p class="help">默认关闭。开启后在启动时和每 6 小时检查一次；下载完成后，点击“重启更新”安装。登录和订阅会保留。</p>
+    <p id="update-status" class="update-status" role="status">尚未检查</p>
+    <progress id="update-progress" max="100" value="0" hidden></progress>
+    <div class="dialog-actions"><button id="release-page" class="subtle">查看发布记录</button><button id="check-update" class="subtle">检查并下载</button><button id="install-update" class="primary" hidden>重启更新</button></div>
+  </dialog>
   <dialog id="login-dialog">
     <div class="dialog-heading"><div><div class="eyebrow">连接你的账号</div><h2>登录夸克网盘</h2></div><button id="close-login" class="icon-button" aria-label="关闭">×</button></div>
     <p class="muted">用手机夸克扫描二维码，并在手机上确认登录。</p>

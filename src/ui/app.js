@@ -35,7 +35,16 @@ function jobCard(job) {
 }
 function render(next) {
   state = next;
-  $('version').textContent = `v${state.version} · ${state.platform === 'darwin' ? 'macOS' : 'Windows'}`;
+  $('version').textContent = `v${state.version} · ${{ darwin: 'macOS', win32: 'Windows', linux: 'Linux' }[state.platform] || state.platform}`;
+  const updating = state.updater || { phase: 'idle' };
+  $('auto-updates').checked = Boolean(state.autoUpdates);
+  const updateMessages = { idle: '尚未检查', checking: '正在连接 GitHub…', current: '没有可用的新版本', downloading: `正在下载 v${updating.version} · ${updating.progress}%`, verifying: '正在校验并准备更新…', ready: `v${updating.version} 已准备好${state.busy ? '，请先暂停或等待当前下载完成' : '，可以重启更新'}`, installing: '正在准备重启更新…', error: updating.error || '更新检查失败，请重试' };
+  $('update-status').textContent = updateMessages[updating.phase] || updateMessages.idle;
+  $('update-status').classList.toggle('error', updating.phase === 'error');
+  $('update-progress').hidden = updating.phase !== 'downloading'; $('update-progress').value = updating.progress || 0;
+  $('check-update').disabled = ['checking', 'downloading', 'verifying', 'installing', 'ready'].includes(updating.phase);
+  $('install-update').hidden = updating.phase !== 'ready'; $('install-update').disabled = state.busy;
+  $('open-updates').textContent = updating.phase === 'ready' ? '软件更新 · 可安装' : '软件更新';
   $('account-status').textContent = state.loggedIn ? '夸克网盘已连接' : '尚未登录夸克';
   $('account-dot').classList.toggle('connected', state.loggedIn);
   $('account-button').textContent = state.loggedIn ? '管理登录' : '登录夸克网盘';
@@ -126,6 +135,12 @@ on('autostart', 'change', async () => {
   finally { $('autostart').checked = state.autostart; $('autostart').disabled = false; }
 });
 on('quit', 'click', () => call('quit'));
+on('open-updates', 'click', () => $('updates-dialog').showModal());
+on('close-updates', 'click', () => $('updates-dialog').close());
+on('auto-updates', 'change', async () => { await call('auto-updates', $('auto-updates').checked); });
+on('check-update', 'click', () => call('check-update'));
+on('install-update', 'click', () => call('install-update'));
+on('release-page', 'click', () => call('release-page'));
 on('cancel-remove', 'click', () => $('remove-dialog').close());
 on('confirm-remove', 'click', async () => { await call('remove-job', removeId); $('remove-dialog').close(); });
 window.archive.onState(render);

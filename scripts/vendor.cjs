@@ -19,8 +19,8 @@ async function findFile(dir, name) {
 }
 async function main() {
   const platform = process.platform, arch = process.arch;
-  if (!['win32', 'darwin'].includes(platform) || !['x64', 'arm64'].includes(arch)) throw new Error('Unsupported build host');
-  const osName = platform === 'win32' ? 'windows' : 'darwin', cpu = arch === 'x64' ? 'amd64' : 'arm64';
+  require('../src/platforms.cjs').target(platform, arch);
+  const osName = platform === 'win32' ? 'windows' : platform, cpu = arch === 'x64' ? 'amd64' : 'arm64';
   const destination = path.join(root, 'vendor', `${platform}-${arch}`);
   await fs.mkdir(destination, { recursive: true });
   const scratch = await fs.mkdtemp(path.join(require('node:os').tmpdir(), 'archive-vendor-'));
@@ -28,7 +28,10 @@ async function main() {
     { name: 'openlist', file: `openlist-${osName}-${cpu}.${platform === 'win32' ? 'zip' : 'tar.gz'}`,
       base: `https://github.com/OpenListTeam/OpenList/releases/download/v${versions.openlist}/`,
       sha256: { 'win32-x64': '10d24913f86843e347eefac219c61224628bbd5d3c7443b2ee119c168a8cb3b9',
-        'darwin-arm64': '36bc448b66a34cfea4cc8a5729775baab51194c4f17a685ab1364fc1735005b7' }[`${platform}-${arch}`] },
+        'darwin-arm64': '36bc448b66a34cfea4cc8a5729775baab51194c4f17a685ab1364fc1735005b7',
+        'darwin-x64': 'a8bf9e5ea927064daf98aa999f9a19435f9fb98ff2049eebe8d70d3f0aefe8c3',
+        'linux-x64': '2f2a5008efe45895292018479cb05556c83e828c3eed68a8b8cd3d35e82f03cb',
+        'linux-arm64': 'eed743a0c3b9d67eb3b58b3e5455957a15eb2f4e199c06309fabdbfb0b571904' }[`${platform}-${arch}`] },
     { name: 'rclone', file: `rclone-v${versions.rclone}-${platform === 'darwin' ? 'osx' : osName}-${cpu}.zip`,
       base: `https://downloads.rclone.org/v${versions.rclone}/`, sums: 'SHA256SUMS' }
   ];
@@ -55,8 +58,9 @@ async function main() {
     const actual = crypto.createHash('sha256').update(await fs.readFile(zip)).digest('hex');
     if (!expected || expected !== actual) throw new Error(`SHA256 mismatch: ${item.file}`);
     const extract = path.join(scratch, item.name); await fs.mkdir(extract);
-    // bsdtar ships with current Windows and macOS; its ZIP handling preserves files.
-    execFileSync('tar', ['-xf', zip, '-C', extract], { stdio: 'inherit', windowsHide: true });
+    // GNU tar on Linux cannot read rclone's ZIP archive.
+    if (platform === 'linux' && item.file.endsWith('.zip')) execFileSync('unzip', ['-q', zip, '-d', extract], { stdio: 'inherit' });
+    else execFileSync('tar', ['-xf', zip, '-C', extract], { stdio: 'inherit', windowsHide: true });
     const binary = item.name + (platform === 'win32' ? '.exe' : '');
     const source = await findFile(extract, binary); if (!source) throw new Error('Missing binary: ' + binary);
     await fs.copyFile(source, path.join(destination, binary));

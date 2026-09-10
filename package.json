@@ -1,7 +1,7 @@
 {
   "name": "quark-timed-sync",
   "productName": "夸克网盘定时同步",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "description": "夸克文件夹与分享链接的追加下载订阅",
   "main": "src/main.cjs",
   "author": "quark-timed-sync contributors",
@@ -16,7 +16,8 @@
   },
   "dependencies": {
     "qrcode": "1.5.4",
-    "tough-cookie": "6.0.2"
+    "tough-cookie": "6.0.2",
+    "yauzl": "3.4.0"
   },
   "devDependencies": {
     "@electron/packager": "20.3.0",

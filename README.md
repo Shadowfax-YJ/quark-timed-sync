@@ -4,7 +4,9 @@
 
 一个用于夸克网盘的开源桌面工具：定时检查网盘文件夹或分享链接，把新增文件自动下载到本地，保持原有目录结构。
 
-支持 Windows x64 和 Apple 芯片 Mac。提供免安装便携包，内置运行环境、OpenList 和 rclone，无需自行部署服务。
+面向 Windows x64、Mac（Apple 芯片 / Intel）和 Linux（x64 / ARM64）的桌面环境。提供免安装便携包，内置运行环境、OpenList 和 rclone，无需自行部署服务。
+
+> 当前 main 为 **v1.1.0 开发版，尚未发布**。GitHub 更新功能、Intel Mac 和 Linux 适配已加入源码；现有 Release 仍为 v1.0.1。旧版没有软件更新入口，待新版发布后需手动升级一次。
 
 ## 下载与开始使用
 
@@ -41,9 +43,23 @@
 
 移动程序文件夹后，请重新设置开机启动。改变订阅来源或本地目录时，移除该订阅后重新添加即可；移除规则不会删除文件。
 
+## 可选的 GitHub 软件更新
+
+左下角打开“软件更新”，可开启**自动检查并下载更新**，默认关闭。开启后在启动时和每 6 小时检查本仓库的 GitHub Releases，只选择适合当前系统与芯片的正式版。关闭时不自动联网检查，也可以点击“检查并下载”手动更新。
+
+更新包和对应的 SHA-256 校验文件必须同时存在。下载校验完成后显示“重启更新”；请等待当前订阅下载结束或先暂停，再点击安装。更新助手等程序退出后替换程序，成功启动新版后清理临时恢复副本；替换失败或新版启动即退出时会尝试恢复原程序。配置、登录信息和订阅下载目录不参与替换。
+
+请将便携程序放在独立、当前用户可写的文件夹中，不要将下载文件保存在程序目录内。若目录中存在清单之外的文件、目录不可写、网络失败或校验失败，更新会停止并显示原因。更新期间需要临时保存下载包、解压文件和独立助手，建议预留约 2 GB 空间。Mac 采用本地签名，仍受系统对未公证应用的启动策略限制。
+
+更新来源固定为本项目，不需要 GitHub 登录或访问令牌。实现与验证说明见 [docs/updates.md](docs/updates.md)。
+
 ## 平台与数据
 
-Windows 包面向 x64；Mac 包面向 Apple 芯片、macOS 12 或更新。macOS 构建和启动检查在 macOS 15 Apple Silicon 上完成，所有内置可执行组件的最低系统要求均检查为不高于 macOS 12；尚未在 macOS 12 实机验证。
+Windows 包面向 x64；Mac 提供 Apple 芯片和 Intel 两个独立包，目标最低系统为 macOS 12。既有 Apple 芯片版曾在 macOS 15 完成构建和启动检查；新增 Intel 版和本轮 Mac 更新流程尚待原生构建验证。
+
+Linux 提供 x64 和 ARM64 两个包，验证配置使用 Ubuntu 22.04 x64 与 Ubuntu 24.04 ARM64。需要图形桌面、GTK 3、NSS、ALSA、GBM、系统密钥环和可用的 Chromium 沙箱环境，不适用于无桌面的服务器。完整解压 ZIP 后运行 `启动夸克网盘定时同步.sh`；桌面环境的压缩工具需保留可执行权限。GNOME 桌面显示托盘可能需要 AppIndicator 支持。Linux 使用 XDG 启动项，凭据保存需要 GNOME Keyring 或 KWallet；程序拒绝使用明文后备密钥保存登录信息。
+
+Linux 的原生运行检查尚未执行，待允许打包后再运行构建矩阵。部分发行版限制非特权用户命名空间，需要管理员按发行版规则配置 Chromium 沙箱；程序不会自动关闭沙箱或修改系统安全策略。
 
 Mac 包采用本地签名，尚未经过 Apple Developer ID 公证。若首次打开被拦截，请按照系统提示，在“隐私与安全性”中选择“仍要打开”。
 
@@ -51,12 +67,13 @@ Mac 包采用本地签名，尚未经过 Apple Developer ID 公证。若首次�
 
 - Windows：`%APPDATA%\Archive Subscriptions`
 - Mac：`~/Library/Application Support/Archive Subscriptions`
+- Linux：`$XDG_CONFIG_HOME/Archive Subscriptions`，通常为 `~/.config/Archive Subscriptions`
 
 登录凭据由系统加密保存；内置网盘服务只监听 `127.0.0.1`，使用随机密码和端口。分发包不包含账号或个人订阅配置，每个人需登录自己的账号。
 
 ## 开发与构建
 
-需要 Node.js 24。Mac 构建还需要 Go 1.26.2，以便从未修改的上游源码编译兼容 macOS 12 的 rclone。
+需要 Node.js 24。Mac 构建还需要 Go 1.26.2，以便从未修改的上游源码编译兼容 macOS 12 的 rclone。Linux 构建需要 `zip`、`unzip` 和桌面运行库。
 
 ```sh
 npm ci
@@ -81,7 +98,7 @@ npm run smoke
 
 Windows 还可使用 `npm run smoke -- --test-startup`，验证真实系统启动项的开启、界面重载后状态读取和关闭。该测试使用临时身份和数据目录，并在结束时移除测试启动项。
 
-GitHub Actions 会在 Windows 与 macOS Apple Silicon 上构建、运行测试并验证打包后的应用。
+GitHub Actions 已配置 Windows x64、macOS Apple Silicon、macOS Intel、Linux x64、Linux ARM64 五个原生构建任务。Windows 还运行 `node test/update-runtime.cjs`，使用临时 Electron 副本实测程序替换与重启，不操作真实用户配置。
 
 图标采用予愿安洁莉娜主题，应用与任务栏使用完整插画，托盘使用简化头像，Mac 菜单栏使用随系统明暗变化的单色版。设计来源和素材导出方法见 [图标说明](assets/branding/README.md)。执行 `npm run icons` 可重新导出图标，不会构建应用安装包。
 

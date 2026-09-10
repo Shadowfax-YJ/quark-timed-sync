@@ -1,5 +1,5 @@
 'use strict';
-const { app, BrowserWindow, ipcMain, dialog, Tray, Menu, Notification, nativeImage, safeStorage, shell, powerMonitor } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Tray, Menu, Notification, nativeImage, safeStorage, shell, powerMonitor, net } = require('electron');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
@@ -8,6 +8,9 @@ const QRCode = require('qrcode');
 const { Quark, parseShare, delay } = require('./quark.cjs');
 const { Engine } = require('./engine.cjs');
 const { atomicJson, validateDestination } = require('./model.cjs');
+const { Updater } = require('./updater.cjs');
+const { electronFetcher } = require('./update-network.cjs');
+const { startup, registerLinuxDesktop } = require('./desktop.cjs');
 
 // Keep profile/keychain identity stable across the visible application rename.
 app.setName('Archive Subscriptions');
@@ -15,25 +18,28 @@ const smoke = process.argv.includes('--smoke-test');
 const testStartup = smoke && process.platform === 'win32' && process.argv.includes('--test-startup');
 if (smoke) app.setPath('userData', process.env.ARCHIVE_TEST_DATA_DIR || require('node:fs').mkdtempSync(path.join(os.tmpdir(), 'archive-smoke-')));
 else app.setPath('userData', path.join(app.getPath('appData'), 'Archive Subscriptions'));
-app.setAppUserModelId(testStartup ? 'local.archive.subscriptions.smoke-' + crypto.randomUUID() : 'local.archive.subscriptions');
+if (process.platform === 'win32') app.setAppUserModelId(testStartup ? 'local.archive.subscriptions.smoke-' + crypto.randomUUID() : 'local.archive.subscriptions');
+if (process.platform === 'linux') { app.setDesktopName('quark-timed-sync.desktop'); app.commandLine.appendSwitch('class', 'quark-timed-sync'); }
 const dataDir = app.getPath('userData');
 const stateFile = path.join(dataDir, 'subscriptions.json');
 const credentialFile = path.join(dataDir, 'credentials.bin');
 const assets = path.join(__dirname, '..', 'assets');
 const vendorDir = app.isPackaged ? path.join(process.resourcesPath, 'vendor') : path.join(__dirname, '..', 'vendor', `${process.platform}-${process.arch}`);
 const uiPath = path.join(__dirname, 'ui', 'index.html');
-let config = { version: 1, paused: false, notifications: true, jobs: [] };
-let loggedIn = false, window, tray, engine, quark, loginController, loginState = { state: 'idle' };
+let config = { version: 1, paused: false, notifications: true, autoUpdates: false, jobs: [] };
+let loggedIn = false, window, tray, engine, quark, updater, installing = false, loginController, loginState = { state: 'idle' };
+const desktopIcon = app.isPackaged ? path.join(process.resourcesPath, 'icon.png') : path.join(assets, 'icon.png');
+const startupSettings = startup({ app, icon: desktopIcon });
 let quitting = false, exiting = false, timer, writeQueue = Promise.resolve();
 let pauseGeneration = 0;
 const states = new Map(), selectedFolders = new Set(), approvedSources = new Map();
 let selectedShare = null;
 
 function safeError(err) { return err?.message || '操作失败，请稍后重试'; }
-function startupEnabled() { return (!smoke || testStartup) && app.getLoginItemSettings({ path: process.execPath, args: ['--background'] }).openAtLogin; }
+function startupEnabled() { return (!smoke || testStartup) && startupSettings.get(); }
 function snapshot() {
   return { version: app.getVersion(), platform: process.platform, loggedIn, login: loginState,
-    paused: config.paused, notifications: config.notifications, autostart: startupEnabled(),
+    paused: config.paused, notifications: config.notifications, autostart: startupEnabled(), autoUpdates: Boolean(config.autoUpdates), updater: updater?.state,
     busy: Boolean(engine?.running), jobs: config.jobs.map(job => ({ ...job,
       source: { kind: job.source.kind, label: job.source.label }, state: states.get(job.id) || { phase: job.lastError ? 'error' : 'idle', current: job.lastError || '等待下次检查', error: job.lastError || '' }
     })) };
@@ -58,6 +64,7 @@ function persist() {
 async function saveSecret(jar) {
   if (smoke) return;
   if (!safeStorage.isEncryptionAvailable()) throw new Error('系统凭据加密不可用，无法保存登录信息');
+  if (process.platform === 'linux' && safeStorage.getSelectedStorageBackend() === 'basic_text') throw new Error('请先启用系统密钥环（GNOME Keyring 或 KWallet），再扫码登录');
   const temp = credentialFile + '.tmp';
   await fs.mkdir(dataDir, { recursive: true, mode: 0o700 });
   await fs.writeFile(temp, safeStorage.encryptString(JSON.stringify(jar)), { mode: 0o600 });
@@ -90,7 +97,7 @@ async function checkAll() {
   }
 }
 async function tick() {
-  if (smoke || quitting || config.paused || !loggedIn || engine.running) return;
+  if (smoke || quitting || installing || config.paused || !loggedIn || engine.running) return;
   const job = config.jobs.find(x => x.enabled && (!x.nextRun || x.nextRun <= Date.now()));
   if (job) await runJob(job).catch(err => update(job.id, { phase: 'error', error: safeError(err), current: safeError(err) }));
 }
@@ -98,7 +105,7 @@ async function quit() {
   if (exiting) return; exiting = true; quitting = true;
   clearInterval(timer); loginController?.abort();
   if (testStartup) app.setLoginItemSettings({ openAtLogin: false });
-  await engine?.close(); await writeQueue.catch(() => {});
+  await updater?.stop(); await engine?.close(); await writeQueue.catch(() => {});
   app.quit();
 }
 function register(name, handler) {
@@ -221,8 +228,21 @@ function setupIPC() {
   });
   register('pause', value => setPaused(value));
   register('notifications', async value => { config.notifications = Boolean(value); await persist(); });
+  register('auto-updates', async value => {
+    config.autoUpdates = Boolean(value); await persist();
+    if (!smoke) updater.enable(config.autoUpdates);
+  });
+  register('check-update', () => { updater.check().catch(() => {}); });
+  register('install-update', async () => {
+    if (smoke) throw new Error('测试模式不会替换程序');
+    if (installing || engine.running) throw new Error('请等当前下载结束，或先暂停下载再更新');
+    installing = true;
+    try { await updater.prepareInstall([dataDir, ...config.jobs.map(job => job.destination)]); await quit(); }
+    catch (error) { installing = false; throw error; }
+  });
+  register('release-page', () => shell.openExternal('https://github.com/Shadowfax-YJ/quark-timed-sync/releases'));
   register('autostart', value => {
-    if (!smoke || testStartup) app.setLoginItemSettings({ openAtLogin: Boolean(value), path: process.execPath, args: ['--background'] });
+    if (!smoke || testStartup) startupSettings.set(Boolean(value));
     const enabled = startupEnabled(); emit();
     if ((!smoke || testStartup) && enabled !== Boolean(value)) throw new Error('系统未能保存开机启动设置，请检查系统的启动项设置');
     return enabled;
@@ -271,6 +291,11 @@ async function smokeTest() {
   const assert = (ok, text) => { if (!ok) throw new Error(text); };
   assert(tray && !tray.isDestroyed(), 'system tray icon was not created');
   assert(await evaluate("document.querySelector('h1').textContent === '夸克网盘定时同步'"), 'application name not rendered');
+  assert(!config.autoUpdates, 'automatic updates must default to off');
+  await evaluate("document.querySelector('#open-updates').click(); document.querySelector('#auto-updates').click()"); await delay(100);
+  assert(config.autoUpdates, 'update preference did not persist');
+  await evaluate("document.querySelector('#auto-updates').click(); document.querySelector('#close-updates').click()"); await delay(100);
+  assert(!config.autoUpdates, 'automatic updates could not be disabled');
   if (testStartup) {
     await evaluate("document.querySelector('#autostart').click()");
     const enabledState = await evaluate("window.archive.call('state')");
@@ -317,6 +342,9 @@ async function smokeTest() {
   const png = await window.webContents.capturePage();
   const output = process.env.ARCHIVE_SMOKE_OUTPUT || path.join(dataDir, 'smoke.png');
   await fs.mkdir(path.dirname(output), { recursive: true }); await fs.writeFile(output, png.toPNG());
+  await evaluate("document.querySelector('#open-updates').click()");
+  await fs.writeFile(path.join(path.dirname(output), 'updates.png'), (await window.webContents.capturePage()).toPNG());
+  await evaluate("document.querySelector('#close-updates').click()");
   assert(errors.length === 0, 'renderer error: ' + errors.join('; '));
   await atomicJson(path.join(path.dirname(output), 'smoke-result.json'), { ok: true, platform: process.platform, arch: process.arch, version: app.getVersion(), checks: ['packaged rclone', 'packaged OpenList startup and shutdown', 'render', 'system tray icon', 'folder picker', 'drive subscription', 'pause persistence', 'share parsing', 'share subfolder', ...(iconCheck ? ['Windows native taskbar icon size and branding'] : []), ...(testStartup ? ['Windows autostart enable, reload, disable'] : [])], screenshot: path.basename(output) });
   await quit();
@@ -335,7 +363,7 @@ else {
       if (read.version !== 1 || !Array.isArray(read.jobs)) throw new Error('配置格式不支持');
       config = { ...config, ...read };
     } catch (err) { if (err.code !== 'ENOENT') throw new Error('订阅配置无法读取。为保护已有配置，应用已停止，请保留数据目录后联系维护者。'); }
-    if (smoke) config = { version: 1, paused: false, notifications: true, jobs: [] };
+    if (smoke) config = { version: 1, paused: false, notifications: true, autoUpdates: false, jobs: [] };
     let jar;
     if (!smoke) {
       try { jar = JSON.parse(safeStorage.decryptString(await fs.readFile(credentialFile))); }
@@ -343,6 +371,15 @@ else {
     }
     quark = new Quark(jar, saveSecret);
     engine = new Engine({ dataDir, vendorDir, quark, update, persist, notify });
+    updater = new Updater({ dataDir, version: app.getVersion(), packaged: app.isPackaged && !smoke,
+      fetcher: smoke ? async () => new Response('', { status: 404 }) : electronFetcher(net) });
+    let notifiedVersion;
+    updater.on('state', state => {
+      emit();
+      if (state.phase === 'ready' && notifiedVersion !== state.version) {
+        notifiedVersion = state.version; notify('软件更新已下载', `v${state.version} 已准备好，打开“软件更新”可重启安装。`);
+      }
+    });
     setupIPC();
     app.setAboutPanelOptions({ applicationName: '夸克网盘定时同步', applicationVersion: app.getVersion() });
     Menu.setApplicationMenu(process.platform === 'darwin' ? Menu.buildFromTemplate([
@@ -361,8 +398,15 @@ else {
       tray.on('click', show);
     } catch {}
     if (smoke) loggedIn = true;
-    await makeWindow(); emit();
+    await makeWindow();
+    const updateId = process.argv.find(arg => arg.startsWith('--update-id='))?.slice('--update-id='.length);
+    await updater.init(updateId).catch(error => updater.set({ phase: 'error', error: safeError(error) }));
+    if (!smoke && app.isPackaged && process.platform === 'linux') {
+      try { registerLinuxDesktop(process.execPath, desktopIcon); } catch { /* Menu registration is optional on read-only profiles. */ }
+    }
+    emit();
     if (smoke) return smokeTest();
+    if (config.autoUpdates) updater.enable(true);
     if (jar) {
       quark.list('0').then(() => { loggedIn = true; emit(); tick(); }).catch(err => { loginState = { state: 'error', error: safeError(err) }; emit(); });
     }

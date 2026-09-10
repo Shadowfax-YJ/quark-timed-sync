@@ -16,8 +16,19 @@ jobs:
         include:
           - os: macos-15
             name: macOS-AppleSilicon
+            arch: arm64
+          - os: macos-15-intel
+            name: macOS-Intel
+            arch: x64
           - os: windows-latest
             name: Windows-x64
+            arch: x64
+          - os: ubuntu-22.04
+            name: Linux-x64
+            arch: x64
+          - os: ubuntu-24.04-arm
+            name: Linux-ARM64
+            arch: arm64
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     steps:
@@ -26,6 +37,14 @@ jobs:
         with:
           node-version: '24'
           cache: npm
+      - name: Verify native build architecture
+        run: node -e "if (process.arch !== '${{ matrix.arch }}') process.exit(1)"
+      - name: Install Linux desktop test dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          if [ '${{ matrix.os }}' = 'ubuntu-22.04' ]; then ALSA=libasound2; GTK=libgtk-3-0; else ALSA=libasound2t64; GTK=libgtk-3-0t64; fi
+          sudo apt-get install -y zip unzip xvfb dbus-x11 "$GTK" libnss3 "$ALSA" libgbm1 libsecret-1-0 libayatana-appindicator3-1
       - run: npm ci --no-audit --no-fund
       - uses: actions/setup-go@v5
         if: runner.os == 'macOS'
@@ -34,14 +53,16 @@ jobs:
           cache: false
       - run: npm run vendor
       - run: npm test
+      - name: Verify Windows update replacement and restart
+        if: runner.os == 'Windows'
+        run: node test/update-runtime.cjs
       - run: npm run package
       - name: Verify packaged Mac application
         if: runner.os == 'macOS'
         run: |
-          test "$(uname -m)" = arm64
           export ARCHIVE_TEST_DATA_DIR="$RUNNER_TEMP/quark-sync-smoke"
           export ARCHIVE_SMOKE_OUTPUT="$GITHUB_WORKSPACE/test-output/mac-smoke.png"
-          "out/夸克网盘定时同步-darwin-arm64/夸克网盘定时同步.app/Contents/MacOS/夸克网盘定时同步" --smoke-test
+          "out/夸克网盘定时同步-darwin-${{ matrix.arch }}/夸克网盘定时同步.app/Contents/MacOS/夸克网盘定时同步" --smoke-test
           cat test-output/smoke-result.json
       - name: Verify packaged Windows application and autostart
         if: runner.os == 'Windows'
@@ -54,6 +75,14 @@ jobs:
           $process = Start-Process -FilePath $appPath -ArgumentList '--smoke-test','--test-startup' -Wait -PassThru -WindowStyle Hidden
           Get-Content test-output/smoke-result.json
           if ($process.ExitCode -ne 0) { throw 'Packaged application verification failed' }
+      - name: Verify packaged Linux application
+        if: runner.os == 'Linux'
+        run: |
+          export ARCHIVE_TEST_DATA_DIR="$RUNNER_TEMP/quark-sync-smoke"
+          export ARCHIVE_SMOKE_OUTPUT="$GITHUB_WORKSPACE/test-output/linux-smoke.png"
+          sudo chown root:root "out/夸克网盘定时同步-linux-${{ matrix.arch }}/chrome-sandbox"
+          sudo chmod 4755 "out/夸克网盘定时同步-linux-${{ matrix.arch }}/chrome-sandbox"
+          dbus-run-session -- xvfb-run -a "out/夸克网盘定时同步-linux-${{ matrix.arch }}/夸克网盘定时同步" --smoke-test
       - uses: actions/upload-artifact@v4
         if: always()
         with:

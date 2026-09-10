@@ -4,7 +4,9 @@ const path = require('node:path');
 
 // Inspect the binaries themselves; Info.plist alone does not establish the
 // deployment target of embedded command-line tools and frameworks.
-async function verifyMacOS12(directory) {
+async function verifyMacOS12(directory, arch = process.arch) {
+  const cpu = { arm64: 0x0100000c, x64: 0x01000007 }[arch];
+  if (!cpu) throw new Error('Unsupported Mac architecture: ' + arch);
   let checked = 0;
   async function walk(dir) {
     for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
@@ -16,7 +18,7 @@ async function verifyMacOS12(directory) {
         const header = Buffer.alloc(32);
         const { bytesRead } = await handle.read(header, 0, 32, 0);
         if (bytesRead < 32 || header.readUInt32LE(0) !== 0xfeedfacf) continue;
-        if (header.readUInt32LE(4) !== 0x0100000c) throw new Error(`Not an Apple Silicon executable: ${file}`);
+        if (header.readUInt32LE(4) !== cpu) throw new Error(`Not a ${arch} executable: ${file}`);
         const length = header.readUInt32LE(20);
         if (length > 1024 * 1024) throw new Error(`Invalid Mach-O header: ${file}`);
         const commands = Buffer.alloc(length);
@@ -36,6 +38,6 @@ async function verifyMacOS12(directory) {
   }
   await walk(directory);
   if (checked < 4) throw new Error('Expected bundled app, Electron, OpenList and rclone Mach-O executables');
-  console.log(`Verified ${checked} Apple Silicon binaries with deployment targets no newer than macOS 12`);
+  console.log(`Verified ${checked} ${arch} binaries with deployment targets no newer than macOS 12`);
 }
 module.exports = { verifyMacOS12 };
