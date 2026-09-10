@@ -80,7 +80,7 @@ async function main() {
     const output = path.join(destination, name);
     execFileSync('lipo', ['-create', path.join(root, 'vendor', 'darwin-x64', name), path.join(root, 'vendor', 'darwin-arm64', name), '-output', output], { stdio: 'inherit' });
     await fs.chmod(output, 0o755);
-    execFileSync('lipo', ['-verify_arch', 'x86_64', 'arm64', output], { stdio: 'inherit' });
+    execFileSync('lipo', [output, '-verify_arch', 'x86_64', 'arm64'], { stdio: 'inherit' });
   }
   await fs.writeFile(path.join(destination, 'versions.json'), JSON.stringify(versions, null, 2));
 }
