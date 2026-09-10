@@ -2,7 +2,7 @@
 
 The optional updater checks `https://api.github.com/repos/Shadowfax-YJ/quark-timed-sync/releases/latest`. It accepts stable numeric tags, rejects downgrades and prereleases, and requires the exact platform/architecture ZIP name plus its `.sha256` sidecar. Build and updater filenames share `src/platforms.cjs`.
 
-Release assets use the existing ASCII naming convention, for example `QuarkTimedSync-1.1.0-Windows-x64-portable.zip`. The application name and executable remain Chinese. Do not rename the ZIP or the filename recorded inside its checksum sidecar when publishing.
+Release assets use the existing ASCII naming convention, for example `QuarkTimedSync-1.1.0-Windows-x64-portable.zip`. The application name and executable remain Chinese. Build scripts validate UTF-8 filenames and set ZIP's language flag (including archives created by macOS `ditto`), then extract each archive with the updater and check its inventory; Mac signatures are rechecked after extraction. Do not rename the ZIP or the filename recorded inside its checksum sidecar when publishing.
 
 Automatic checking/downloading defaults to off. Enabling it checks at startup and every six hours while the app runs. Manual checking also downloads a newer matching release. Installation requires the separate restart button and waits for active subscriptions to finish or be paused. Turning the option off cancels an in-progress download. GitHub errors are displayed separately from subscription state.
 

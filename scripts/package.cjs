@@ -64,6 +64,17 @@ async function main() {
       'Add-Type -AssemblyName System.IO.Compression.FileSystem; [System.IO.Compression.ZipFile]::CreateFromDirectory($env:QUARK_PACKAGE_DIRECTORY, $env:QUARK_PACKAGE_ZIP, [System.IO.Compression.CompressionLevel]::Optimal, $true)'],
     { stdio: 'inherit', windowsHide: true, env: { ...process.env, QUARK_PACKAGE_DIRECTORY: appDir, QUARK_PACKAGE_ZIP: zip } });
   }
+  await require('./zip-utf8.cjs').markUtf8(zip);
+  // Exercise the same extractor and inventory check used by in-app updates.
+  const verifyDir = await fs.mkdtemp(path.join(root, 'out', '.verify-'));
+  try {
+    const extracted = path.join(verifyDir, 'payload');
+    await require('../src/update-zip.cjs').extractZip(zip, extracted);
+    const extractedDir = path.join(extracted, path.basename(appDir));
+    const installed = platform === 'darwin' ? path.join(extractedDir, name + '.app') : extractedDir;
+    await require('../src/update-layout.cjs').readLayout(installed, platform, arch, version);
+    if (platform === 'darwin') execFileSync('codesign', ['--verify', '--deep', '--strict', installed], { stdio: 'inherit' });
+  } finally { await fs.rm(verifyDir, { recursive: true, force: true }); }
   const hash = crypto.createHash('sha256').update(await fs.readFile(zip)).digest('hex');
   await fs.writeFile(zip + '.sha256', `${hash}  ${archive}\n`);
   console.log(JSON.stringify({ archive: zip, directory: appDir, sha256: hash }));

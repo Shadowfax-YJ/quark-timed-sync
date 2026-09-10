@@ -21,13 +21,13 @@ async function temporary(t) {
   return root;
 }
 // Small stored ZIP fixtures let us exercise malformed paths without running a packager.
-function zip(entries) {
+function zip(entries, utf8 = true) {
   const locals = [], central = []; let offset = 0;
   for (const { name, content, mode = 0o100644 } of entries) {
     const data = Buffer.from(content), filename = Buffer.from(name), local = Buffer.alloc(30), dir = Buffer.alloc(46);
-    local.writeUInt32LE(0x04034b50); local.writeUInt16LE(20, 4); local.writeUInt16LE(0x800, 6);
+    local.writeUInt32LE(0x04034b50); local.writeUInt16LE(20, 4); local.writeUInt16LE(utf8 ? 0x800 : 0, 6);
     local.writeUInt32LE(crc32(data), 14); local.writeUInt32LE(data.length, 18); local.writeUInt32LE(data.length, 22); local.writeUInt16LE(filename.length, 26);
-    dir.writeUInt32LE(0x02014b50); dir.writeUInt16LE(0x314, 4); dir.writeUInt16LE(20, 6); dir.writeUInt16LE(0x800, 8);
+    dir.writeUInt32LE(0x02014b50); dir.writeUInt16LE(0x314, 4); dir.writeUInt16LE(20, 6); dir.writeUInt16LE(utf8 ? 0x800 : 0, 8);
     dir.writeUInt32LE(crc32(data), 16); dir.writeUInt32LE(data.length, 20); dir.writeUInt32LE(data.length, 24); dir.writeUInt16LE(filename.length, 28);
     dir.writeUInt32LE((mode << 16) >>> 0, 38); dir.writeUInt32LE(offset, 42);
     locals.push(local, filename, data); central.push(dir, filename); offset += local.length + filename.length + data.length;
@@ -114,6 +114,16 @@ test('a corrupted download never reaches ready state or touches the installed ap
   await updater.init(); await assert.rejects(() => updater.check(), /SHA-256/);
   assert.equal(updater.state.phase, 'error'); assert.equal(updater.ready, null);
   assert.equal(await fs.readFile(path.join(installRoot, spec.executable), 'utf8'), '1.1.0');
+});
+
+test('Mac UTF-8 ZIP names remain readable by the updater after packaging', async t => {
+  const root = await temporary(t), file = path.join(root, 'mac.zip'), name = '夸克网盘定时同步.app/Contents/MacOS/夸克网盘定时同步';
+  await fs.writeFile(file, zip([{ name, content: 'binary', mode: 0o100755 }], false));
+  await extractZip(file, path.join(root, 'before'));
+  await assert.rejects(() => fs.access(path.join(root, 'before', name)));
+  await require('../scripts/zip-utf8.cjs').markUtf8(file);
+  await extractZip(file, path.join(root, 'after'));
+  assert.equal(await fs.readFile(path.join(root, 'after', name), 'utf8'), 'binary');
 });
 
 test('disabling automatic updates aborts the active request', async t => {
