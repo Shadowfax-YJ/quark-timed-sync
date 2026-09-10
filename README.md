@@ -6,7 +6,7 @@
 
 面向 Windows x64、Mac（Apple 芯片 / Intel）和 Linux（x64 / ARM64）的桌面环境。提供免安装便携包，内置运行环境、OpenList 和 rclone，无需自行部署服务。
 
-> 当前 main 为 **v1.1.0 开发版，尚未发布**。GitHub 更新功能、Intel Mac 和 Linux 适配已加入源码；现有 Release 仍为 v1.0.1。旧版没有软件更新入口，待新版发布后需手动升级一次。
+> **v1.1.0** 新增可选的 GitHub 软件更新、Intel Mac 和 Linux 支持，并更换应用、任务栏与托盘图标。最初误标为 v1.0.1 的历史版本更正为 **v1.0.0**；旧版没有软件更新入口，需要手动升级一次。
 
 ## 下载与开始使用
 
@@ -55,11 +55,11 @@
 
 ## 平台与数据
 
-Windows 包面向 x64；Mac 提供 Apple 芯片和 Intel 两个独立包，目标最低系统为 macOS 12。既有 Apple 芯片版曾在 macOS 15 完成构建和启动检查；新增 Intel 版和本轮 Mac 更新流程尚待原生构建验证。
+Windows 包面向 x64；Mac 提供 Apple 芯片和 Intel 两个独立包，目标最低系统为 macOS 12。Mac 构建在 macOS 15 原生运行，并检查所有组件的芯片架构、最低系统版本和应用签名。
 
 Linux 提供 x64 和 ARM64 两个包，验证配置使用 Ubuntu 22.04 x64 与 Ubuntu 24.04 ARM64。需要图形桌面、GTK 3、NSS、ALSA、GBM、系统密钥环和可用的 Chromium 沙箱环境，不适用于无桌面的服务器。完整解压 ZIP 后运行 `启动夸克网盘定时同步.sh`；桌面环境的压缩工具需保留可执行权限。GNOME 桌面显示托盘可能需要 AppIndicator 支持。Linux 使用 XDG 启动项，凭据保存需要 GNOME Keyring 或 KWallet；程序拒绝使用明文后备密钥保存登录信息。
 
-Linux 的原生运行检查尚未执行，待允许打包后再运行构建矩阵。部分发行版限制非特权用户命名空间，需要管理员按发行版规则配置 Chromium 沙箱；程序不会自动关闭沙箱或修改系统安全策略。
+Linux 原生启动检查在上述 Ubuntu 环境使用 Xvfb 和软件绘制完成。部分发行版限制非特权用户命名空间，需要管理员按发行版规则配置 Chromium 沙箱；程序不会自动关闭沙箱或修改系统安全策略。
 
 Mac 包采用本地签名，尚未经过 Apple Developer ID 公证。若首次打开被拦截，请按照系统提示，在“隐私与安全性”中选择“仍要打开”。
 

@@ -16,15 +16,15 @@ An incoming copy is placed beside the installed app for same-volume renames. A s
 
 Release archives and checksums share the same GitHub trust boundary; they are integrity checks, not independent publisher signatures. The Mac package remains ad-hoc signed and is not Developer ID notarized. A restrictive OS policy can still prevent it from starting. Linux needs a working Chromium sandbox; an update cannot grant root ownership to a new setuid helper. Administrators must manage such requirements on systems that do not permit user namespaces.
 
-## Validation at v1.1.0 development time
+## Validation for v1.1.0
 
 - Unit/integration tests exercise release selection for all five targets, corrupted downloads, cancellation, extraction boundaries, persisted downloads, installation rollback, user file preservation and Linux desktop startup files.
 - On Windows, a disposable pair of real Electron runtimes completed exit → replacement → restart → acknowledgement → recovery-copy cleanup. This test exposed and fixed Windows 8.3 path alias handling and Electron's virtual `.asar` filesystem copying.
 - The main Windows application passed its source smoke test, including software-update preferences and existing native taskbar icon checks.
 - The real GitHub v1.0.1 release API and checksum sidecar were fetched through Chromium's network stack, including the GitHub release CDN redirect. The application ZIP was not downloaded or installed during this network check. Chromium uses the system proxy; redirects are validated before following them.
-- Native Intel Mac and Linux builds have been configured but have not run. Mac updater installation has not been exercised on a Mac. No v1.1.0 portable archive or release has been published.
+- Release CI builds and launches all five packages on their native architectures. Mac checks include binary deployment targets and the final signed inventory. Linux uses Xvfb with the software compositor on runners without GPUs. Native macOS/Linux in-place updater replacement has not been exercised; Windows has the full real-runtime replacement test described above.
 
-The current v1.0.1 release has no updater. Users must manually move to a release containing this feature once; later releases must preserve the manifest and checksum contract. Build with `npm run package` and publish the complete ZIP plus its `.sha256` for each target only after its checks pass.
+The initial release, originally mislabeled v1.0.1 and corrected to v1.0.0, has no updater. Users must manually move to v1.1.0 once; later releases must preserve the manifest and checksum contract. Build with `npm run package` and publish the complete ZIP plus its `.sha256` for each target only after its checks pass.
 
 ## Primary references
 

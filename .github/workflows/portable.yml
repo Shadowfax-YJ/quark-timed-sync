@@ -82,7 +82,8 @@ jobs:
           export ARCHIVE_SMOKE_OUTPUT="$GITHUB_WORKSPACE/test-output/linux-smoke.png"
           sudo chown root:root "out/夸克网盘定时同步-linux-${{ matrix.arch }}/chrome-sandbox"
           sudo chmod 4755 "out/夸克网盘定时同步-linux-${{ matrix.arch }}/chrome-sandbox"
-          dbus-run-session -- xvfb-run -a "out/夸克网盘定时同步-linux-${{ matrix.arch }}/夸克网盘定时同步" --smoke-test
+          # Hosted runners have no GPU; capturePage needs the software compositor.
+          dbus-run-session -- xvfb-run -a "out/夸克网盘定时同步-linux-${{ matrix.arch }}/夸克网盘定时同步" --smoke-test --disable-gpu || { cat test-output/smoke-result.json; exit 1; }
       - uses: actions/upload-artifact@v4
         if: always()
         with:

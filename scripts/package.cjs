@@ -35,10 +35,9 @@ async function main() {
   if (platform === 'darwin') {
     const bundle = path.join(appDir, name + '.app');
     await require('./macos-compat.cjs').verifyMacOS12(bundle, arch);
-    // The inventory is signed with the bundle; signing replaces CodeResources.
-    const signature = path.join(bundle, 'Contents', '_CodeSignature');
-    await fs.mkdir(signature, { recursive: true });
-    await fs.writeFile(path.join(signature, 'CodeResources'), '');
+    // Sign nested helpers first so every CodeResources path exists in the inventory.
+    // Sign again after writing the inventory so it is covered by the final seal.
+    execFileSync('codesign', ['--force', '--deep', '--sign', '-', bundle], { stdio: 'inherit' });
     await writeLayout(bundle, platform, arch, version);
     execFileSync('codesign', ['--force', '--deep', '--sign', '-', bundle], { stdio: 'inherit' });
     execFileSync('codesign', ['--verify', '--deep', '--strict', bundle], { stdio: 'inherit' });
