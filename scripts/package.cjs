@@ -34,7 +34,7 @@ async function main() {
     execFileSync('codesign', ['--force', '--deep', '--sign', '-', bundle], { stdio: 'inherit' });
     execFileSync('codesign', ['--verify', '--deep', '--strict', bundle], { stdio: 'inherit' });
   }
-  const archive = `${name}-${version}-${platform === 'darwin' ? 'macOS-AppleSilicon' : 'Windows-x64'}-portable.zip`;
+  const archive = `QuarkTimedSync-${version}-${platform === 'darwin' ? 'macOS-AppleSilicon' : 'Windows-x64'}-portable.zip`;
   const zip = path.join(root, 'out', archive);
   if (platform === 'darwin') execFileSync('ditto', ['-c', '-k', '--sequesterRsrc', '--keepParent', appDir, zip], { stdio: 'inherit' });
   else {

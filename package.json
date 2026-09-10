@@ -1,7 +1,7 @@
 {
   "name": "quark-timed-sync",
   "productName": "夸克网盘定时同步",
-  "version": "1.0.1",
+  "version": "1.0.0",
   "description": "夸克文件夹与分享链接的追加下载订阅",
   "main": "src/main.cjs",
   "author": "quark-timed-sync contributors",
