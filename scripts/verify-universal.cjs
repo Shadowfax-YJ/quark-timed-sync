@@ -9,6 +9,7 @@ async function main() {
   const version = require('../package.json').version;
   const source = path.resolve(process.argv[2]), output = path.resolve(process.argv[3]);
   const file = path.join(source, assetName(version, 'darwin', 'universal'));
+  await fs.mkdir(path.dirname(output), { recursive: true });
   await extractZip(file, output);
   const bundle = path.join(output, target('darwin', 'universal').folder, PRODUCT + '.app');
   await readLayout(bundle, 'darwin', process.arch, version);
