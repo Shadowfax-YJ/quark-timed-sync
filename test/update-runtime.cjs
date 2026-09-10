@@ -56,7 +56,9 @@ app.whenReady().then(async () => {
   for (let i = 0; i < 40 && alive(status.workerPid); i++) await sleep(250);
   if (alive(status.workerPid)) throw new Error('Worker did not exit; inspect ' + root);
   if (!inside(os.tmpdir(), root) || !path.basename(root).startsWith('quark-runtime-update-')) throw new Error('Unsafe fixture cleanup path');
-  await fs.rm(root, { recursive: true, force: true });
+  // Windows can retain the just-exited fixture's executable mapping briefly,
+  // even after the updater helper has finished. Retry only owned temp cleanup.
+  await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   console.log('PASS: real Windows helper replaced the unlocked app, launched the new version, received its boot acknowledgement and removed the recovery copy.');
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

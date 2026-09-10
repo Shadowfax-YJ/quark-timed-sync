@@ -48,7 +48,9 @@ test('real embedded server and rclone preserve old content; quit kills children'
   await fs.writeFile(path.join(target, 'old.txt'), 'must remain local');
   await fs.writeFile(path.join(source, 'nested', 'new.txt'), 'new bytes');
   const originalTime = (await fs.stat(path.join(target, 'old.txt'))).mtimeMs;
-  const engine = new Engine({ dataDir: path.join(root, 'data'), vendorDir, update() {}, async persist() {}, notify() {} });
+  const records = [];
+  const engine = new Engine({ dataDir: path.join(root, 'data'), vendorDir, update() {}, async persist() {}, notify() {},
+    log(level, source, message, context) { records.push({ level, source, message, context }); } });
   t.after(async () => { await engine.close(); await fs.rm(root, { recursive: true, force: true }); });
   const crypto = require('node:crypto'), randomBytes = crypto.randomBytes;
   // Force a valid random-password shape beginning with '-' so the real CLI
@@ -67,6 +69,8 @@ test('real embedded server and rclone preserve old content; quit kills children'
   assert.equal(await fs.readFile(path.join(target, 'old.txt'), 'utf8'), 'must remain local');
   assert.equal((await fs.stat(path.join(target, 'old.txt'))).mtimeMs, originalTime);
   assert.equal(await fs.readFile(path.join(target, 'nested', 'new.txt'), 'utf8'), 'new bytes');
+  assert(records.some(entry => entry.level === 'info' && entry.source === 'download' && entry.context.details.file === 'nested/new.txt'), 'real completed downloads must be logged');
+  assert(!JSON.stringify(records).includes(engine.password), 'service credentials must not be logged');
   const server = engine.server; await engine.close(); assert(server.exitCode !== null || server.signalCode !== null); assert.equal(engine.children.size, 0);
 });
 

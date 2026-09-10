@@ -60,4 +60,7 @@ test('invalid filters and settings fail clearly; an unavailable log directory ca
   assert.throws(() => logs.query({ from: 'bad-date' }), /时间/); assert.throws(() => logs.configure({ days: 0 }), /日志设置/);
   const file = path.join(root, 'not-directory'); await fs.writeFile(file, 'x');
   const failed = new LogStore(file); await failed.write('error', 'app', 'cannot write'); assert.match(failed.failure, /日志写入/);
+  logs.disabled = true; await logs.write('info', 'app', 'not written');
+  await assert.rejects(() => logs.clear(), /日志目录不可用/);
+  await assert.rejects(() => logs.query(), /日志目录不可用/);
 });

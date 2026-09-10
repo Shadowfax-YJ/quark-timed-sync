@@ -59,7 +59,7 @@ class LogStore extends EventEmitter {
     return this;
   }
   enqueue(work) {
-    const next = this.queue.then(work);
+    const next = this.queue.then(() => { if (this.disabled) throw new Error('日志目录不可用，请检查目录权限后重启应用'); return work(); });
     this.queue = next.catch(error => { this.failure = '日志写入或读取失败：' + sanitize(error.message); this.emit('changed'); });
     return next;
   }

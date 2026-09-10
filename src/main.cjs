@@ -426,7 +426,7 @@ else {
   app.on('activate', show);
   app.whenReady().then(async () => {
     await fs.mkdir(dataDir, { recursive: true, mode: 0o700 });
-    await logs.init().catch(error => { logs.failure = '日志初始化失败：' + sanitize(error.message); });
+    await logs.init().catch(error => { logs.disabled = true; logs.failure = '日志初始化失败：' + sanitize(error.message); });
     log('info', 'app', '应用启动', { details: { version: app.getVersion(), platform: process.platform, arch: process.arch } });
     try {
       const read = JSON.parse(await fs.readFile(stateFile, 'utf8'));
