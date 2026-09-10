@@ -236,8 +236,9 @@ function setupIPC() {
 }
 
 async function makeWindow() {
+  // ICO supplies size-specific HICONs on Windows; PNG keeps its original 1024px size.
   window = new BrowserWindow({ width: 1080, height: 780, minWidth: 800, minHeight: 650, show: false,
-    title: '夸克网盘定时同步', backgroundColor: '#f6f7f9', icon: path.join(assets, 'icon.png'), autoHideMenuBar: true,
+    title: '夸克网盘定时同步', backgroundColor: '#f6f7f9', icon: path.join(assets, process.platform === 'win32' ? 'icon.ico' : 'icon.png'), autoHideMenuBar: true,
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false } });
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('will-navigate', event => event.preventDefault());
@@ -252,6 +253,14 @@ async function makeWindow() {
 
 async function smokeTest() {
   window.showInactive();
+  const iconCheck = process.platform === 'win32' && process.env.ARCHIVE_ICON_CHECK_SCRIPT;
+  if (iconCheck) {
+    // Read the actual packaged window's HICONs without blocking its message loop.
+    const { stdout } = await require('node:util').promisify(require('node:child_process').execFile)(
+      'powershell.exe', ['-NoProfile', '-NonInteractive', '-File', iconCheck,
+        '-WindowHandle', window.getNativeWindowHandle().readBigUInt64LE().toString()], { windowsHide: true });
+    console.log(stdout.trim());
+  }
   // Check the packaged service paths and executable permissions as well as UI.
   await engine.command('rclone', ['version']);
   await engine.start(); await engine.close();
@@ -308,7 +317,7 @@ async function smokeTest() {
   const output = process.env.ARCHIVE_SMOKE_OUTPUT || path.join(dataDir, 'smoke.png');
   await fs.mkdir(path.dirname(output), { recursive: true }); await fs.writeFile(output, png.toPNG());
   assert(errors.length === 0, 'renderer error: ' + errors.join('; '));
-  await atomicJson(path.join(path.dirname(output), 'smoke-result.json'), { ok: true, platform: process.platform, arch: process.arch, version: app.getVersion(), checks: ['packaged rclone', 'packaged OpenList startup and shutdown', 'render', 'folder picker', 'drive subscription', 'pause persistence', 'share parsing', 'share subfolder', ...(testStartup ? ['Windows autostart enable, reload, disable'] : [])], screenshot: path.basename(output) });
+  await atomicJson(path.join(path.dirname(output), 'smoke-result.json'), { ok: true, platform: process.platform, arch: process.arch, version: app.getVersion(), checks: ['packaged rclone', 'packaged OpenList startup and shutdown', 'render', 'folder picker', 'drive subscription', 'pause persistence', 'share parsing', 'share subfolder', ...(iconCheck ? ['Windows native taskbar icon size and branding'] : []), ...(testStartup ? ['Windows autostart enable, reload, disable'] : [])], screenshot: path.basename(output) });
   await quit();
 }
 

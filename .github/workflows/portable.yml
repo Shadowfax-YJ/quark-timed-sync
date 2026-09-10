@@ -49,6 +49,7 @@ jobs:
         run: |
           $env:ARCHIVE_TEST_DATA_DIR = Join-Path $env:RUNNER_TEMP 'quark-sync-smoke'
           $env:ARCHIVE_SMOKE_OUTPUT = Join-Path $env:GITHUB_WORKSPACE 'test-output/windows-smoke.png'
+          $env:ARCHIVE_ICON_CHECK_SCRIPT = Join-Path $env:GITHUB_WORKSPACE 'test/windows-icon.ps1'
           $appPath = Join-Path (Get-Location) 'out/夸克网盘定时同步-win32-x64/夸克网盘定时同步.exe'
           $process = Start-Process -FilePath $appPath -ArgumentList '--smoke-test','--test-startup' -Wait -PassThru -WindowStyle Hidden
           Get-Content test-output/smoke-result.json
