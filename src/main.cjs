@@ -7,6 +7,7 @@ const crypto = require('node:crypto');
 const QRCode = require('qrcode');
 const { Quark, parseShare, delay } = require('./quark.cjs');
 const { Engine } = require('./engine.cjs');
+const { PluginManager, validatePlugin } = require('./plugins.cjs');
 const { atomicJson, validateDestination } = require('./model.cjs');
 const { Updater } = require('./updater.cjs');
 const { electronFetcher } = require('./update-network.cjs');
@@ -40,6 +41,7 @@ let loggedIn = false, window, tray, engine, quark, updater, installing = false, 
 const desktopIcon = app.isPackaged ? path.join(process.resourcesPath, 'icon.png') : path.join(assets, 'icon.png');
 const startupSettings = startup({ app, icon: desktopIcon });
 let quitting = false, exiting = false, timer, writeQueue = Promise.resolve();
+let plugins;
 let pauseGeneration = 0;
 const states = new Map(), selectedFolders = new Set(), approvedSources = new Map();
 let selectedShare = null;
@@ -49,7 +51,7 @@ function startupEnabled() { return (!smoke || testStartup) && startupSettings.ge
 function snapshot() {
   return { version: app.getVersion(), platform: process.platform, loggedIn, login: loginState,
     paused: config.paused, notifications: config.notifications, autostart: startupEnabled(), autoUpdates: Boolean(config.autoUpdates), updater: updater?.state,
-    busy: Boolean(engine?.running), jobs: config.jobs.map(job => ({ ...job,
+    busy: Boolean(engine?.running), jobs: config.jobs.map(job => ({ ...job, pluginStatus: plugins?.status(job.id) || [],
       source: { kind: job.source.kind, label: job.source.label }, state: states.get(job.id) || { phase: job.lastError ? 'error' : 'idle', current: job.lastError || '等待下次检查', error: job.lastError || '' }
     })) };
 }
@@ -112,6 +114,7 @@ async function tick() {
 }
 async function quit() {
   if (exiting) return; exiting = true; quitting = true;
+  await plugins?.close();
   clearInterval(timer); loginController?.abort();
   if (testStartup) app.setLoginItemSettings({ openAtLogin: false });
   await updater?.stop(); await engine?.close(); await writeQueue.catch(() => {});
@@ -164,6 +167,27 @@ async function beginLogin() {
 }
 
 function setupIPC() {
+  register('configure-plugin', async id => {
+    const job = config.jobs.find(item => item.id === id); if (!job) throw new Error('订阅不存在');
+    const selected = await dialog.showOpenDialog(window, { title: '选择已安装插件的本地配置',
+      properties: ['openFile'], filters: [{ name: 'Plugin JSON', extensions: ['json'] }] });
+    if (selected.canceled) return;
+    const file = selected.filePaths[0];
+    if ((await fs.stat(file)).size > 65536) throw new Error('插件配置过大');
+    const plugin = validatePlugin(JSON.parse(await fs.readFile(file, 'utf8')));
+    const choice = await dialog.showMessageBox(window, { type: 'question', title: '启用本地后处理插件',
+      message: `启用 ${plugin.id} ${plugin.version}？`, detail: '此插件将使用你的本地账户权限执行。请确认它来自你信任的安装程序。\n\n' + JSON.stringify(plugin.command),
+      buttons: ['取消', '启用插件'], defaultId: 0, cancelId: 0 });
+    if (choice.response !== 1) return;
+    plugins.cancel(job.id);
+    job.plugins = [...(job.plugins || []).filter(item => item.id !== plugin.id), plugin];
+    await persist(); await plugins.retry(job.id); void plugins.pump().catch(() => {});
+  });
+  register('disable-plugins', async id => {
+    const job = config.jobs.find(item => item.id === id); if (!job) throw new Error('订阅不存在');
+    plugins.cancel(job.id); job.plugins = []; await persist();
+  });
+  register('retry-plugins', async id => { await plugins.retry(id); void plugins.pump().catch(() => {}); });
   register('state', () => snapshot());
   register('logs-query', filter => logs.query(filter));
   register('logs-settings', settings => logs.configure(settings));
@@ -246,6 +270,7 @@ function setupIPC() {
     const job = config.jobs.find(x => x.id === id); if (!job) return;
     if (engine.running) throw new Error('请先暂停当前下载，再移除订阅');
     config.jobs = config.jobs.filter(x => x.id !== id); states.delete(id); await persist();
+    plugins.cancel(id);
     log('info', 'subscription', '已移除订阅，已有文件保留', jobContext(job));
   });
   register('check-job', async id => {
@@ -440,7 +465,9 @@ else {
       catch (err) { if (err.code !== 'ENOENT') loginState = { state: 'error', error: '登录凭据无法在此系统读取，请重新扫码登录' }; }
     }
     quark = new Quark(jar, saveSecret);
-    engine = new Engine({ dataDir, vendorDir, quark, update, persist, notify, log });
+    plugins = new PluginManager({ dataDir, getJobs: () => config.jobs, changed: emit, log });
+    await plugins.init().catch(() => { plugins.failure = '后处理目录暂不可用，基础同步继续'; });
+    engine = new Engine({ dataDir, vendorDir, quark, update, persist, notify, log, plugins });
     updater = new Updater({ dataDir, version: app.getVersion(), packaged: app.isPackaged && !smoke,
       fetcher: smoke ? async () => new Response('', { status: 404 }) : electronFetcher(net) });
     let notifiedVersion, loggedUpdatePhase;
@@ -485,7 +512,7 @@ else {
     if (jar) {
       quark.list('0').then(() => { loggedIn = true; log('info', 'account', '已连接夸克网盘'); emit(); tick(); }).catch(err => { loginState = { state: 'error', error: safeError(err) }; log('error', 'account', '夸克连接失败，请检查网络或重新登录', { details: { error: err } }); emit(); });
     }
-    timer = setInterval(() => tick(), 5000);
+    timer = setInterval(() => { tick(); void plugins.pump().catch(() => log('error', 'plugin', '后处理队列暂不可用')); }, 5000);
     powerMonitor.on('resume', () => { log('info', 'app', '电脑已唤醒，恢复订阅调度'); tick(); });
     powerMonitor.on('suspend', () => { log('info', 'app', '电脑进入睡眠，停止当前下载'); engine.stop(); });
   }).catch(async err => {

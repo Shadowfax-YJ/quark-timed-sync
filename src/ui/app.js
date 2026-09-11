@@ -22,6 +22,10 @@ function jobCard(job) {
   if (live.phase === 'downloading') statusText = `${live.current} · ${bytes(live.bytes)} · ${bytes(live.speed)}/s`;
   if (paused && !active) statusText = '订阅已暂停，已有文件保留。也可以手动检查一次。';
   status.append(element('span', live.phase === 'error' ? 'error' : '', statusText)); card.append(status);
+  for (const plugin of job.pluginStatus || []) {
+    const text = `${plugin.id} · ${plugin.message}${plugin.pending ? ` · 待处理 ${plugin.pending}` : ''}`;
+    card.append(element('div', 'job-status' + (['rejected', 'unsupported'].includes(plugin.status) ? ' error' : ''), text));
+  }
   if (active) { const bar = element('div', 'progress'), progress = document.createElement('progress'); if (live.totalBytes > 0) { progress.max = live.totalBytes; progress.value = live.bytes || 0; } bar.append(progress); card.append(bar); }
   const bottom = element('div', 'job-bottom'), timing = element('div', 'timing');
   timing.append(document.createTextNode('每 '));
@@ -29,8 +33,11 @@ function jobCard(job) {
   interval.addEventListener('change', () => call('set-interval', job.id, interval.value).catch(() => {})); timing.append(interval, document.createTextNode(` 分钟检查${!paused && !active ? ' · 下次 ' + time(job.nextRun) : ''}`));
   const actions = element('div', 'job-actions'); const check = button('立即检查', () => call('check-job', job.id)); check.disabled = state.busy || !state.loggedIn;
   actions.append(button('打开目录', () => call('open-destination', job.id)), check,
+    button('后处理插件', () => call('configure-plugin', job.id)),
     button(job.enabled ? '暂停' : '恢复', () => call('toggle-job', job.id)),
     button('×', () => { removeId = job.id; $('remove-dialog').showModal(); }, 'icon-button'));
+  if (job.plugins?.length) actions.append(button('重试后处理', () => call('retry-plugins', job.id)),
+    button('禁用后处理', () => call('disable-plugins', job.id)));
   bottom.append(timing, actions); card.append(bottom); return card;
 }
 function render(next) {

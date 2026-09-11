@@ -1,6 +1,10 @@
 <p align="center"><img src="assets/icon.png" width="160" height="160" alt="予愿安洁莉娜主题应用图标"></p>
 
+后处理插件是可选扩展。普通使用仍是 GUI 登录夸克、订阅目录并同步文件，不需要 Python、analysis 或额外安装器。BlackFlow 数据完整性由 analysis 读取时校验；仅需要同步后立即显示领域校验状态时才安装相应插件。
+
 # 夸克网盘定时同步
+
+订阅后处理已支持本地命令插件、持久化重试和独立状态，配置见 [插件接入设计](docs/plugins.md)，维护入口为 [extend-sync-plugins](.agents/skills/extend-sync-plugins/SKILL.md)。基础同步继续遵守下文的追加下载规则。
 
 一个用于夸克网盘的开源桌面工具：定时检查网盘文件夹或分享链接，把新增文件自动下载到本地，保持原有目录结构。
 

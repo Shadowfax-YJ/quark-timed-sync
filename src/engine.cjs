@@ -14,8 +14,8 @@ async function availablePort() {
   });
 }
 class Engine {
-  constructor({ dataDir, vendorDir, quark, update, persist, notify, log = () => {} }) {
-    Object.assign(this, { dataDir, vendorDir, quark, update, persist, notify, log });
+  constructor({ dataDir, vendorDir, quark, update, persist, notify, log = () => {}, plugins }) {
+    Object.assign(this, { dataDir, vendorDir, quark, update, persist, notify, log, plugins });
     this.children = new Set(); this.controller = null; this.server = null; this.running = false;
     this.copyProcess = null; this.port = 0; this.auth = ''; this.password = ''; this.starting = null;
   }
@@ -145,6 +145,7 @@ class Engine {
     this.running = true; this.controller = new AbortController();
     const signal = this.controller.signal;
     const started = Date.now(), context = { jobId: job.id, jobName: job.name };
+    const settlement = { run_id: crypto.randomUUID(), outcome: 'partial_failure' };
     this.log('info', 'subscription', '开始检查新增文件', context);
     let filesFile;
     try {
@@ -163,10 +164,12 @@ class Engine {
       }
       if (signal.aborted) throw abortError();
       job.lastSuccess = new Date().toISOString(); job.lastCount = plan.files.length; job.lastError = '';
+      settlement.outcome = 'success';
       this.update(job.id, { phase: 'idle', current: plan.files.length ? `已下载 ${plan.files.length} 个新文件` : `没有新增文件，已跳过 ${plan.skipped} 个已有文件`, transferred: plan.files.length });
       this.log('info', 'subscription', plan.files.length ? `订阅完成，已下载 ${plan.files.length} 个新文件` : '本次订阅检查完成，没有新增文件', { ...context, details: { downloaded: plan.files.length, durationMs: Date.now() - started } });
       if (plan.files.length) this.notify('下载完成', `${job.name}：已下载 ${plan.files.length} 个新文件`);
     } catch (err) {
+      if (signal.aborted || err.name === 'AbortError') settlement.outcome = 'cancelled';
       if (signal.aborted || err.name === 'AbortError') { this.update(job.id, { phase: 'paused', current: '已停止，未完成的下载下次继续' }); this.log('warn', 'subscription', '检查或下载已停止，未完成的文件下次继续', context); }
       else {
         const message = err.message || '下载失败，请稍后重试';
@@ -176,6 +179,8 @@ class Engine {
         this.log('error', 'subscription', message, { ...context, details: { error: err, durationMs: Date.now() - started } });
       }
     } finally {
+      try { await this.plugins?.settled(job, settlement); }
+      catch { this.log('error', 'plugin', '后处理事件登记失败，重启时将扫描补投', context); }
       if (filesFile) await fs.unlink(filesFile).catch(() => {});
       job.nextRun = Date.now() + job.interval * 60000;
       this.running = false; this.controller = null; this.copyProcess = null;
