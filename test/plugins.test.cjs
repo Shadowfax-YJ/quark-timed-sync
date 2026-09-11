@@ -8,7 +8,7 @@ const { PluginManager, validatePlugin, invoke } = require('../src/plugins.cjs');
 const { Engine } = require('../src/engine.cjs');
 
 async function fixture(t) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'sync-plugin-test-'));
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'sync-plugin-test-')));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const script = path.join(root, 'plugin.cjs');
   await fs.writeFile(script, `let input='';process.stdin.on('data',b=>input+=b);process.stdin.on('end',()=>{
