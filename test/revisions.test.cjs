@@ -18,7 +18,7 @@ test('record reader accepts plain and CDN-gzipped JSON with a bounded expanded s
   assert.throws(() => parseRecordBytes(gzip(Buffer.alloc(2 * 1024 * 1024, 32))));
   assert.throws(() => parseRecordBytes(gzip(raw).subarray(0, 12)));
 });
-async function temp(t) { const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'revision-test-')); t.after(() => fs.rm(dir, { recursive: true, force: true })); return dir; }
+async function temp(t) { const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'revision-test-'))); t.after(() => fs.rm(dir, { recursive: true, force: true })); return dir; }
 test('ordered hash chain accepts skipped local versions, refuses forks, cycles, paths and unknown schema', () => {
   const a = record(), b = record('corrected', 'second', 'r2');
   assert.equal(revisionHeads([b, a]).get(a.path).sha256, b.sha256);
