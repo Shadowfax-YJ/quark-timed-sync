@@ -16,7 +16,12 @@ async function sendObject(url, method, headers, body, signal) {
       res.on('data', chunk => { length += chunk.length; if (length > 1024 * 1024) req.destroy(new Error('上传响应过大')); else chunks.push(chunk); });
       res.on('error', reject);
       res.on('end', () => {
-        if (res.statusCode !== 200) return reject(new Error(`对象存储上传被拒绝（HTTP ${res.statusCode}）`));
+        if (res.statusCode !== 200) {
+          // OSS returns a machine-readable code; avoid logging response bodies
+          // which can contain object keys, request signatures or callbacks.
+          const code = Buffer.concat(chunks).toString('utf8').match(/<Code>([A-Za-z0-9_.-]{1,100})<\/Code>/)?.[1];
+          return reject(new Error(`对象存储上传被拒绝（HTTP ${res.statusCode}${code ? ', ' + code : ''}）`));
+        }
         resolve({ etag: res.headers.etag, body: Buffer.concat(chunks) });
       });
     });
@@ -69,7 +74,7 @@ async function uploadQuark(quark, file, parent, name, signal, progress = () => {
             Referer: 'https://pan.quark.cn/', 'x-oss-date': date, 'x-oss-user-agent': OSS_UA }, bytes, signal);
           if (!/^"?[a-f0-9]{32}"?$/i.test(result.etag || '')) throw new Error('上传分片没有有效 ETag');
           break;
-        } catch (error) { if (attempt === 2 || signal?.aborted) throw error; await delay(1000 * (attempt + 1), signal); }
+        } catch (error) { if (attempt === 2 || signal?.aborted) throw new Error(`分片 ${part}：${error.message}`); await delay(1000 * (attempt + 1), signal); }
       }
       etags.push(result.etag);
       progress(`已上传 ${part}/${Math.ceil(stat.size / partSize)} 片`);
