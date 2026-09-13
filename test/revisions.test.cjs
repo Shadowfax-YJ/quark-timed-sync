@@ -112,3 +112,12 @@ test('cloud corruption never publishes a record or moves the original', async t 
   await assert.rejects(() => publishRevision(r, packageFile, store, { publish: true }));
   assert.equal(store.recordsList.length, 0); assert.equal(await store.hash(r.path), r.previous_sha256);
 });
+
+test('publication tolerates delayed visibility without accepting incorrect uploaded bytes', async t => {
+  const root = await temp(t), packageFile = path.join(root, 'new.zip'); await fs.writeFile(packageFile, 'corrected');
+  const r = record(), store = cloud(r), hash = store.hash;
+  let misses = 1;
+  store.hash = async key => key === r.content_path && store.files.has(key) && misses-- > 0 ? null : hash(key);
+  await publishRevision(r, packageFile, store, { publish: true });
+  assert.equal(store.recordsList.length, 1); assert.equal(await store.hash(r.path), r.sha256);
+});

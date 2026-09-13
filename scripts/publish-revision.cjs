@@ -84,12 +84,15 @@ app.whenReady().then(async () => {
   }
   async function upload(file, rel) {
     relative(rel);
+    if (args.includes('--native-upload')) return require('./upload-quark.cjs').uploadQuark(quark, file,
+      await folder(path.posix.dirname(rel), true), path.posix.basename(rel), new AbortController().signal,
+      message => console.log(new Date().toISOString(), rel, message));
     const password = await engine.command('rclone', ['obscure', '-'], { stdio: ['pipe', 'pipe', 'pipe'], inputPassword: engine.password });
     const env = { ...process.env, RCLONE_CONFIG_ARCHIVE_TYPE: 'webdav', RCLONE_CONFIG_ARCHIVE_URL: `http://127.0.0.1:${engine.port}/dav${mount}/`,
       RCLONE_CONFIG_ARCHIVE_VENDOR: 'other', RCLONE_CONFIG_ARCHIVE_USER: 'admin', RCLONE_CONFIG_ARCHIVE_PASS: password };
     await new Promise((resolve, reject) => {
       const child = engine.spawn('rclone', ['copyto', file, 'archive:' + rel, '--config', '', '--ignore-existing',
-        '--retries', '2', '--low-level-retries', '2', '--timeout', '3m', '--max-duration', '8m',
+        '--retries', '2', '--low-level-retries', '2', '--timeout', '3m', '--max-duration', '8m', '--cutoff-mode', 'hard',
         '--no-gzip-encoding', '--header-upload', 'Accept-Encoding: identity'], { env });
       let diagnostic = ''; child.stdout.resume();
       child.stderr.on('data', chunk => { if (diagnostic.length < 12000) diagnostic += chunk.toString(); });

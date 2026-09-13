@@ -55,6 +55,12 @@ electron scripts/publish-revision.cjs --job SUBSCRIPTION_ID --record revision.js
 夸克/UC API 和阿里云对象域名追加 NO_PROXY，不改变系统代理或 GUI 设置。
 下载固定要求原始字节，防止 CDN gzip 响应与 WebDAV 原文件长度不一致。
 
+`--native-upload` 使用维护用的夸克分片上传实现，显示分片进度、发送准确 Content-Length，
+单次对象请求无响应超过 30 秒即停止，分片最多重试三次。协议依据
+[OpenList quark_uc 实现](https://github.com/OpenListTeam/OpenList/blob/v4.2.6/drivers/quark_uc/driver.go)，
+仍由原发布流程回读完整 SHA256 并保留原件。默认 WebDAV 上传设置八分钟硬截止；
+“秒传完成”但目录尚不可见时会短暂等待，已可见却摘要错误的内容立即拒绝。
+
 维护验收可运行 `electron scripts/apply-revisions.cjs --job SUBSCRIPTION_ID --verify-repeat`，
 仅同步已发布的修订并检查重复执行零更新。持续自动检查仍需在新版 GUI 对该订阅开启修订同步。
 

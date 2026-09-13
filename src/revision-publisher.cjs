@@ -1,6 +1,7 @@
 'use strict';
 const path = require('node:path');
 const { validateRecord, relative, revisionHeads, hashFile, RECORDS } = require('./revisions.cjs');
+const { delay } = require('./quark.cjs');
 
 // The transport is scoped to one user-selected cloud root. No delete operation.
 async function publishRevision(record, packageFile, store, { publish = false, signal, progress = () => {} } = {}) {
@@ -27,7 +28,12 @@ async function publishRevision(record, packageFile, store, { publish = false, si
     const prior = await store.hash(target);
     if (prior !== null && prior !== digest) throw new Error('不可变云端对象发生冲突');
     if (prior === null) { await store.mkdir(path.posix.dirname(target)); await store.upload(file, target); }
-    if (await store.hash(target) !== digest) throw new Error('云端上传后的完整 SHA256 校验失败');
+    let uploaded = await store.hash(target);
+    // A hash-reused upload can finish before its directory entry is visible.
+    for (let retry = 0; uploaded === null && retry < 5; retry++) {
+      await delay(1000, signal); uploaded = await store.hash(target);
+    }
+    if (uploaded !== digest) throw new Error(uploaded === null ? '云端上传尚未可见，可用同一修订重试' : '云端上传后的完整 SHA256 校验失败');
   };
   progress('上传并回读校验修订对象');
   await ensureUpload(packageFile, record.content_path, record.sha256);
