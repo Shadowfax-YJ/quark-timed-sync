@@ -123,7 +123,12 @@ test('real revision download updates an existing archive and detects missing pub
   assert.equal((await engine.applyRevisions(job, source, client, new AbortController().signal)).updated, 1);
   assert.equal(await fs.readFile(path.join(target, '28.zip'), 'utf8'), 'NEW');
   assert.equal(await fs.readFile(path.join(target, '.sync-recycle', record.previous_sha256, '28.zip'), 'utf8'), 'OLD');
+  const localRecord = path.join(target, '.sync-revisions/records/fixture-1.json');
+  await fs.writeFile(localRecord, require('node:zlib').gzipSync(Buffer.from(JSON.stringify(record))));
   assert.equal((await engine.applyRevisions(job, source, client, new AbortController().signal)).updated, 0);
+  assert.deepEqual(JSON.parse(await fs.readFile(localRecord, 'utf8')), record);
+  await fs.writeFile(localRecord, require('node:zlib').gzipSync(Buffer.from(JSON.stringify({ ...record, reason: 'different history' }))));
+  await assert.rejects(() => engine.applyRevisions(job, source, client, new AbortController().signal), /同编号修订记录已改变/);
   await fs.unlink(path.join(source, '.sync-revisions/records/fixture-1.json'));
   await assert.rejects(() => engine.applyRevisions(job, source, client, new AbortController().signal), /缺少已应用/);
 });

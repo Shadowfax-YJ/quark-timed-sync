@@ -30,6 +30,8 @@
 全部发布记录保存在本地 `.sync-revisions/records/`，供后处理确认修订链。
 应用私有状态另存已应用摘要；本地 records 也约束云端历史，迁移应用配置后仍能检测历史缺失。
 旧包和记录不自动过期；本地损坏文件也按实际摘要留档。
+旧版下载器遗留的 gzip 记录先有界解压并与云端记录核对；内容一致后恢复普通 JSON，
+内容冲突仍停止，不能把解压成功当作历史一致。
 
 ## 维护发布
 
@@ -60,6 +62,7 @@ electron scripts/publish-revision.cjs --job SUBSCRIPTION_ID --record revision.js
 [OpenList quark_uc 实现](https://github.com/OpenListTeam/OpenList/blob/v4.2.6/drivers/quark_uc/driver.go)，
 仍由原发布流程回读完整 SHA256 并保留原件。默认 WebDAV 上传设置八分钟硬截止；
 “秒传完成”但目录尚不可见时会短暂等待，已可见却摘要错误的内容立即拒绝。
+夸克分片接口实测要求顺序上传（乱序返回 `PartNotSequential`），仅在不同文件之间并发。
 
 维护验收可运行 `electron scripts/apply-revisions.cjs --job SUBSCRIPTION_ID --verify-repeat`，
 仅同步已发布的修订并检查重复执行零更新。持续自动检查仍需在新版 GUI 对该订阅开启修订同步。

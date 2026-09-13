@@ -253,8 +253,12 @@ class Engine {
     for (const record of records) {
       const file = await safeLocal(job.destination, `${RECORDS}/${record.revision_id}.json`, true);
       try {
-        if (JSON.stringify(JSON.parse(await fs.readFile(file, 'utf8'))) !== JSON.stringify(record))
+        const saved = await fs.readFile(file);
+        if (JSON.stringify(parseRecordBytes(saved)) !== JSON.stringify(record))
           throw new Error('同编号修订记录已改变，保留本地文件');
+        // Older append-only clients can have saved the CDN's gzip envelope as
+        // a .json file. Normalize only after matching its decoded publication.
+        if (saved[0] === 0x1f && saved[1] === 0x8b) await atomicJson(file, record);
       } catch (e) { if (e.code !== 'ENOENT') throw e; await atomicJson(file, record); }
     }
     let updated = 0;
