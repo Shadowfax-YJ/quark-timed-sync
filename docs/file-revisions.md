@@ -63,6 +63,9 @@ electron scripts/publish-revision.cjs --job SUBSCRIPTION_ID --record revision.js
 仍由原发布流程回读完整 SHA256 并保留原件。默认 WebDAV 上传设置八分钟硬截止；
 “秒传完成”但目录尚不可见时会短暂等待，已可见却摘要错误的内容立即拒绝。
 夸克分片接口实测要求顺序上传（乱序返回 `PartNotSequential`），仅在不同文件之间并发。
+成功响应丢失后，重传可能返回 `409 PartAlreadyExist`。维护上传器读取该上传任务的
+已存分片，核对编号、长度和本地分片 MD5 后继续；缺失或内容冲突立即停止。
+分片恢复不替代发布前的整包 SHA256 回读，回收和同名替换仍在整包校验之后。
 
 维护验收可运行 `electron scripts/apply-revisions.cjs --job SUBSCRIPTION_ID --verify-repeat`，
 仅同步已发布的修订并检查重复执行零更新。持续自动检查仍需在新版 GUI 对该订阅开启修订同步。

@@ -20,7 +20,9 @@ async function sendObject(url, method, headers, body, signal) {
           // OSS returns a machine-readable code; avoid logging response bodies
           // which can contain object keys, request signatures or callbacks.
           const code = Buffer.concat(chunks).toString('utf8').match(/<Code>([A-Za-z0-9_.-]{1,100})<\/Code>/)?.[1];
-          return reject(new Error(`对象存储上传被拒绝（HTTP ${res.statusCode}${code ? ', ' + code : ''}）`));
+          const error = new Error(`对象存储上传被拒绝（HTTP ${res.statusCode}${code ? ', ' + code : ''}）`);
+          error.statusCode = res.statusCode; error.ossCode = code;
+          return reject(error);
         }
         resolve({ etag: res.headers.etag, body: Buffer.concat(chunks) });
       });
@@ -55,6 +57,25 @@ async function uploadQuark(quark, file, parent, name, signal, progress = () => {
   const target = new URL(`https://${pre.bucket}.${host}/${pre.obj_key}`);
   const partSize = prepared.metadata?.part_size;
   if (!Number.isSafeInteger(partSize) || partSize < 1 || partSize > 64 * 1024 * 1024) throw new Error('上传分片大小异常');
+  const storedPart = async (part, bytes) => {
+    const date = new Date().toUTCString();
+    const auth = await api('/file/upload/auth', { auth_info: pre.auth_info, task_id: pre.task_id,
+      auth_meta: `GET\n\n\n${date}\nx-oss-date:${date}\nx-oss-user-agent:${OSS_UA}\n/${pre.bucket}/${pre.obj_key}?uploadId=${pre.upload_id}` });
+    const url = new URL(target);
+    url.search = new URLSearchParams({ uploadId: pre.upload_id, 'part-number-marker': part - 1, 'max-parts': 1 });
+    const response = await transport(url, 'GET', { Authorization: auth.data.auth_key, Referer: 'https://pan.quark.cn/',
+      'x-oss-date': date, 'x-oss-user-agent': OSS_UA }, Buffer.alloc(0), signal);
+    const matches = [...response.body.toString('utf8').matchAll(/<Part>([\s\S]*?)<\/Part>/g)]
+      .map(match => match[1]).filter(xml => Number(xml.match(/<PartNumber>(\d+)<\/PartNumber>/)?.[1]) === part);
+    const xml = matches.length === 1 ? matches[0] : '';
+    const etag = xml.match(/<ETag>\s*&quot;([a-f0-9]{32})&quot;\s*<\/ETag>/i)?.[1]
+      || xml.match(/<ETag>\s*"?([a-f0-9]{32})"?\s*<\/ETag>/i)?.[1];
+    if (Number(xml.match(/<Size>(\d+)<\/Size>/)?.[1]) !== bytes.length
+        || etag?.toLowerCase() !== crypto.createHash('md5').update(bytes).digest('hex'))
+      throw new Error(`已有分片 ${part} 与待上传内容不一致，停止上传`);
+    progress(`已核验服务端分片 ${part}，继续上传`);
+    return { etag: '"' + etag + '"' };
+  };
   progress(`开始分片上传（${Math.ceil(stat.size / partSize)} 片）`);
   const etags = [], reader = await fs.open(file, 'r');
   try {
@@ -74,7 +95,13 @@ async function uploadQuark(quark, file, parent, name, signal, progress = () => {
             Referer: 'https://pan.quark.cn/', 'x-oss-date': date, 'x-oss-user-agent': OSS_UA }, bytes, signal);
           if (!/^"?[a-f0-9]{32}"?$/i.test(result.etag || '')) throw new Error('上传分片没有有效 ETag');
           break;
-        } catch (error) { if (attempt === 2 || signal?.aborted) throw new Error(`分片 ${part}：${error.message}`); await delay(1000 * (attempt + 1), signal); }
+        } catch (error) {
+          if (!signal?.aborted && error.statusCode === 409 && error.ossCode === 'PartAlreadyExist') {
+            result = await storedPart(part, bytes); break;
+          }
+          if (attempt === 2 || signal?.aborted) throw new Error(`分片 ${part}：${error.message}`);
+          await delay(1000 * (attempt + 1), signal);
+        }
       }
       etags.push(result.etag);
       progress(`已上传 ${part}/${Math.ceil(stat.size / partSize)} 片`);
