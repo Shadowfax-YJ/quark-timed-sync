@@ -32,7 +32,7 @@ async function validateDestination(destination) {
   }
   await fs.access(destination, require('node:fs').constants.W_OK);
 }
-async function prepareFiles(client, fid, destination, signal, progress = () => {}) {
+async function prepareFiles(client, fid, destination, signal, progress = () => {}, revised = new Set()) {
   await validateDestination(destination);
   const files = []; let skipped = 0; let totalBytes = 0;
   const seenIds = new Set(); const seenPaths = new Set();
@@ -43,6 +43,7 @@ async function prepareFiles(client, fid, destination, signal, progress = () => {
     const items = await client.list(parent, signal);
     for (const item of items) {
       const name = safeName(item.file_name);
+        if (!relative && ['.sync-revisions', '.sync-recycle'].includes(name.toLowerCase())) continue;
       const rel = relative ? relative + '/' + name : name;
       const canonical = rel.normalize('NFC').toLowerCase();
       if (seenPaths.has(canonical)) throw new Error(`存在仅大小写或 Unicode 形式不同的重名文件：${rel}`);
@@ -56,6 +57,7 @@ async function prepareFiles(client, fid, destination, signal, progress = () => {
         await walk(item.fid, rel, depth + 1);
       } else {
         if (stat && !stat.isFile()) throw new Error(`本地同名路径不是普通文件：${rel}`);
+        if (revised.has(rel)) continue;
         if (stat) skipped++;
         else { files.push(rel); totalBytes += Number(item.size) || 0; }
       }
@@ -80,6 +82,7 @@ async function reconcileShare(client, share, sourceRoot, targetRoot, signal, pro
     const missing = [];
     for (const item of from) {
       safeName(item.file_name);
+        if (depth === 0 && item.file_name.toLowerCase() === '.sync-recycle') continue;
       const key = item.file_name.normalize('NFC').toLowerCase();
       if (names.has(key)) throw new Error('分享目录含无法在本地区分的重名文件');
       names.add(key);

@@ -28,6 +28,10 @@ function jobCard(job) {
   }
   if (active) { const bar = element('div', 'progress'), progress = document.createElement('progress'); if (live.totalBytes > 0) { progress.max = live.totalBytes; progress.value = live.bytes || 0; } bar.append(progress); card.append(bar); }
   const bottom = element('div', 'job-bottom'), timing = element('div', 'timing');
+  const revisionLabel = element('label', 'check-help'), revisionInput = element('input');
+  revisionInput.type = 'checkbox'; revisionInput.checked = Boolean(job.revisionUpdates); revisionInput.disabled = state.busy;
+  revisionInput.addEventListener('change', () => call('set-revision-updates', job.id, revisionInput.checked).catch(() => {}));
+  revisionLabel.append(revisionInput, element('span', '', '按云端修订记录校验并更新同名文件，旧文件留档')); card.append(revisionLabel);
   timing.append(document.createTextNode('每 '));
   const interval = element('input', 'job-interval'); interval.type = 'number'; interval.min = '5'; interval.max = '1440'; interval.value = job.interval; interval.setAttribute('aria-label', '检查间隔（分钟）');
   interval.addEventListener('change', () => call('set-interval', job.id, interval.value).catch(() => {})); timing.append(interval, document.createTextNode(` 分钟检查${!paused && !active ? ' · 下次 ' + time(job.nextRun) : ''}`));
@@ -58,6 +62,7 @@ function render(next) {
   $('global-pause').textContent = state.paused ? '恢复全部' : '暂停全部';
   $('notifications').checked = state.notifications; $('autostart').checked = state.autostart;
   $('count').textContent = state.jobs.length;
+  $('sync-policy').textContent = state.jobs.some(job => job.revisionUpdates) ? '按订阅设置更新 · 旧文件留档' : '只追加 · 已有文件跳过';
   $('overall').textContent = state.paused ? '全部订阅已暂停' : state.busy ? '正在检查或下载新增文件' : state.jobs.length ? `${state.jobs.filter(x => x.enabled).length} 个订阅正在等待更新` : '准备好接收新文件';
   $('empty').hidden = state.jobs.length > 0;
   const focused = document.activeElement;
@@ -78,7 +83,7 @@ function openWizard() {
   if (!state.loggedIn) { openLogin().catch(() => {}); return; }
   sourceToken = null; destination = null; mode = 'drive'; folderStack = [];
   $('source-label').textContent = '尚未选择来源'; $('local-label').textContent = '尚未选择本地目录';
-  $('wizard-error').textContent = ''; $('allow-save').checked = false; $('share-url').value = ''; $('share-passcode').value = '';
+  $('wizard-error').textContent = ''; $('allow-save').checked = false; $('revision-updates').checked = false; $('share-url').value = ''; $('share-passcode').value = '';
   $('job-name').value = 'archive'; setMode('drive'); $('wizard').showModal();
 }
 function setMode(value) {
@@ -129,7 +134,7 @@ on('save-subscription', 'click', async () => {
   $('wizard-error').textContent = ''; $('save-subscription').disabled = true;
   try {
     if (!sourceToken) throw new Error('请先选择来源目录'); if (!destination) throw new Error('请先选择本地目录');
-    await call('save-job', { name: $('job-name').value, sourceToken, destination, interval: Number($('interval').value), allowSave: $('allow-save').checked });
+    await call('save-job', { name: $('job-name').value, sourceToken, destination, interval: Number($('interval').value), allowSave: $('allow-save').checked, revisionUpdates: $('revision-updates').checked });
     $('wizard').close(); toast(state.paused ? '订阅已创建。全部订阅目前处于暂停状态。' : '订阅已创建，开始检查新增文件');
   } catch (err) { $('wizard-error').textContent = err.message; }
   finally { $('save-subscription').disabled = false; }

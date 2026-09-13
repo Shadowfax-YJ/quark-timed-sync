@@ -26,7 +26,7 @@
   <main>
     <section id="subscriptions-view">
     <header><div><div class="eyebrow">夸克网盘 · 自动下载</div><h1>夸克网盘定时同步</h1><p>选好来源，新增文件会自动保存到你的电脑。</p></div><button id="global-pause" class="subtle">暂停全部</button></header>
-    <div class="summary"><span class="live-dot"></span><span id="overall">准备好接收新文件</span><span class="summary-right">只追加 · 已有文件跳过</span></div>
+    <div class="summary"><span class="live-dot"></span><span id="overall">准备好接收新文件</span><span id="sync-policy" class="summary-right">只追加 · 已有文件跳过</span></div>
     <div class="section-heading"><h2>我的订阅 <span id="count">0</span></h2><button id="add-subscription" class="primary">＋ 添加订阅</button></div>
     <section id="jobs" aria-live="polite"></section>
     <section id="empty" class="empty">
@@ -98,7 +98,8 @@
     <div id="source-label" class="selected-path">尚未选择来源</div>
     <div class="field"><span><b class="step-number">2</b> 下载到哪里</span><button id="choose-local" class="subtle full">选择本地文件夹 →</button><div id="local-label" class="selected-path">尚未选择本地目录</div></div>
     <div class="row between"><label class="interval-label">检查间隔 <input id="interval" type="number" min="5" max="1440" value="60"> 分钟</label><span class="help">有新增就下载</span></div>
-    <div class="policy">✓ 保持目录结构　✓ 已有文件跳过　✓ 不覆盖、不删除</div>
+    <div class="policy">默认保持目录结构，跳过已有文件。</div>
+    <label class="check-help"><input id="revision-updates" type="checkbox"><span>按云端修订记录校验并更新同名文件。下载校验成功后替换，旧文件保留到本地回收目录；没有修订记录的已有文件仍然跳过。</span></label>
     <div class="dialog-actions"><span id="wizard-error" class="error" role="alert"></span><button id="save-subscription" class="primary">创建并开始订阅</button></div>
   </dialog>
   <dialog id="folder-dialog">

@@ -256,7 +256,7 @@ function setupIPC() {
       if (a === b || a.startsWith(b + path.sep) || b.startsWith(a + path.sep)) throw new Error('本地目录与已有订阅重叠，请选择独立的文件夹');
     }
     const job = { id: crypto.randomUUID(), name: String(input.name || '新订阅').trim().slice(0, 80) || '新订阅',
-      source, destination, interval, enabled: true, nextRun: Date.now() };
+      source, destination, interval, revisionUpdates: input.revisionUpdates === true, enabled: true, nextRun: Date.now() };
     config.jobs.push(job); approvedSources.delete(input.sourceToken); await persist();
     log('info', 'subscription', '已创建订阅', { ...jobContext(job), details: { kind: source.kind, intervalMinutes: interval, destination } }); tick(); return job.id;
   });
@@ -284,6 +284,13 @@ function setupIPC() {
     if (!job || !Number.isInteger(interval) || interval < 5 || interval > 1440) throw new Error('检查间隔需要在 5 到 1440 分钟之间');
     job.interval = interval; job.nextRun = Date.now() + interval * 60000; await persist();
     log('info', 'subscription', `检查间隔已改为 ${interval} 分钟`, jobContext(job));
+  });
+  register('set-revision-updates', async (id, value) => {
+    const job = config.jobs.find(x => x.id === id);
+    if (!job || typeof value !== 'boolean') throw new Error('订阅设置无效');
+    if (engine.running) throw new Error('请等待当前同步结束或先暂停');
+    job.revisionUpdates = value; await persist();
+    log('info', 'subscription', value ? '已开启修订哈希校验与更新，旧文件保留到回收目录' : '已关闭修订更新，恢复只追加下载', jobContext(job));
   });
   register('pause', value => setPaused(value));
   register('notifications', async value => { config.notifications = Boolean(value); await persist(); });
@@ -391,7 +398,14 @@ async function smokeTest() {
   assert(config.jobs[0].source.fid === 'demo-archive', 'wrong source folder');
   await evaluate("document.querySelector('#global-pause').click()");
   await delay(100); assert(config.paused, 'global pause did not persist');
+  await evaluate("document.querySelector('.job .check-help input[type=checkbox]').click()");
+  await delay(100);
+  assert(config.jobs[0].revisionUpdates === true, 'revision updates did not persist');
+  assert(JSON.parse(await fs.readFile(stateFile, 'utf8')).jobs[0].revisionUpdates === true, 'revision flag missing on disk');
+  await evaluate("window.location.reload()"); await delay(500);
+  assert(await evaluate("document.querySelector('.job .check-help input[type=checkbox]').checked"), 'revision option lost on reload');
   await evaluate("document.querySelector('#add-subscription').click()"); await delay(100);
+  assert(!(await evaluate("document.querySelector('#revision-updates').checked")), 'new subscriptions inherited revision mode');
   await evaluate("document.querySelector('[data-mode=share]').click(); document.querySelector('#share-url').value='https://pan.quark.cn/s/test123?pwd=ABCD'; document.querySelector('#read-share').click()");
   await delay(150);
   assert(await evaluate("document.querySelector('#folder-dialog').open"), 'share folders not displayed');

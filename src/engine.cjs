@@ -6,6 +6,7 @@ const { spawn } = require('node:child_process');
 const crypto = require('node:crypto');
 const { atomicJson, prepareFiles, reconcileShare, copyArgs } = require('./model.cjs');
 const { delay, abortError } = require('./quark.cjs');
+const { revisionHeads, installRevision, safeLocal, RECORDS, parseRecordBytes } = require('./revisions.cjs');
 
 async function availablePort() {
   return new Promise((resolve, reject) => {
@@ -152,7 +153,8 @@ class Engine {
       this.update(job.id, { phase: 'checking', error: '', current: '连接夸克', discovered: 0, skipped: 0, transferred: 0, bytes: 0 });
       const { fid, client } = job.source.kind === 'share' ? await this.shareRoot(job, signal)
         : { fid: job.source.fid, client: this.quark };
-      const plan = await prepareFiles(client, fid, job.destination, signal, progress => this.update(job.id, progress));
+      const revised = job.revisionUpdates ? await this.applyRevisions(job, fid, client, signal) : { paths: new Set(), updated: 0 };
+      const plan = await prepareFiles(client, fid, job.destination, signal, progress => this.update(job.id, progress), revised.paths);
       this.log('info', 'subscription', `检查完成：新增 ${plan.files.length} 个，跳过 ${plan.skipped} 个已有文件`, { ...context, details: { added: plan.files.length, skipped: plan.skipped, totalBytes: plan.totalBytes } });
       if (plan.files.length) {
         const mountPath = await this.mount(job, fid, signal);
@@ -163,11 +165,15 @@ class Engine {
         await this.copy(job, mountPath, filesFile, obscured, signal);
       }
       if (signal.aborted) throw abortError();
-      job.lastSuccess = new Date().toISOString(); job.lastCount = plan.files.length; job.lastError = '';
+      job.lastSuccess = new Date().toISOString(); job.lastCount = plan.files.length + revised.updated; job.lastError = '';
       settlement.outcome = 'success';
       this.update(job.id, { phase: 'idle', current: plan.files.length ? `已下载 ${plan.files.length} 个新文件` : `没有新增文件，已跳过 ${plan.skipped} 个已有文件`, transferred: plan.files.length });
       this.log('info', 'subscription', plan.files.length ? `订阅完成，已下载 ${plan.files.length} 个新文件` : '本次订阅检查完成，没有新增文件', { ...context, details: { downloaded: plan.files.length, durationMs: Date.now() - started } });
       if (plan.files.length) this.notify('下载完成', `${job.name}：已下载 ${plan.files.length} 个新文件`);
+      if (revised.updated) {
+        this.update(job.id, { phase: 'idle', current: `新增 ${plan.files.length} 个，已校验更新 ${revised.updated} 个文件`, transferred: job.lastCount });
+        this.notify('修订同步完成', `${job.name}：已更新 ${revised.updated} 个文件，旧文件已留档`);
+      }
     } catch (err) {
       if (signal.aborted || err.name === 'AbortError') settlement.outcome = 'cancelled';
       if (signal.aborted || err.name === 'AbortError') { this.update(job.id, { phase: 'paused', current: '已停止，未完成的下载下次继续' }); this.log('warn', 'subscription', '检查或下载已停止，未完成的文件下次继续', context); }
@@ -186,6 +192,85 @@ class Engine {
       this.running = false; this.controller = null; this.copyProcess = null;
       await this.persist();
     }
+  }
+  async downloadFile(mountPath, relative, destination, signal) {
+    const password = await this.command('rclone', ['obscure', '-'], { stdio: ['pipe', 'pipe', 'pipe'], inputPassword: this.password });
+    const env = { ...process.env, RCLONE_CONFIG_ARCHIVE_TYPE: 'webdav',
+      RCLONE_CONFIG_ARCHIVE_URL: `http://127.0.0.1:${this.port}/dav${mountPath}/`, RCLONE_CONFIG_ARCHIVE_VENDOR: 'other',
+      RCLONE_CONFIG_ARCHIVE_USER: 'admin', RCLONE_CONFIG_ARCHIVE_PASS: password };
+    // Preserve the stored bytes: Quark's CDN can compress JSON without updating
+    // the WebDAV size, corrupting ranged downloads and their content hashes.
+    await this.command('rclone', ['copyto', 'archive:' + relative, destination, '--config', '', '--retries', '2',
+      '--low-level-retries', '2', '--contimeout', '20s', '--timeout', '2m',
+      '--no-gzip-encoding', '--header-download', 'Accept-Encoding: identity'], { env, signal });
+  }
+  async applyRevisions(job, fid, client, signal) {
+    // Local records also anchor history when the application profile is moved.
+    const localRecordDirectory = path.dirname(await safeLocal(job.destination, RECORDS + '/probe.json'));
+    const localNames = await fs.readdir(localRecordDirectory).catch(e => { if (e.code === 'ENOENT') return []; throw e; });
+    let parent = fid;
+    for (const component of RECORDS.split('/')) {
+      const entries = await client.list(parent, signal);
+      const matches = entries.filter(item => item.file_name === component);
+      if (!matches.length) {
+        // Once applied, missing publication history must not silently roll back.
+        if (localNames.length || await fs.stat(path.join(this.dataDir, `revision-heads-${job.id}.json`)).catch(() => null))
+          throw new Error('云端修订记录缺失，保留已同步文件');
+        return { paths: new Set(), updated: 0 };
+      }
+      if (matches.length !== 1 || !(matches[0].dir || matches[0].file === false || matches[0].file_type === 0))
+        throw new Error('云端修订目录异常');
+      parent = matches[0].fid;
+    }
+    const entries = await client.list(parent, signal);
+    if (entries.length > 10000) throw new Error('修订记录过多，请缩小订阅范围');
+    const mountPath = await this.mount(job, fid, signal), records = [];
+    const scratch = await fs.mkdtemp(path.join(this.dataDir, 'revision-read-'));
+    try {
+      for (const entry of entries) {
+        if (!/^[a-zA-Z0-9_-]{1,100}\.json$/.test(entry.file_name) || entry.size > 1024 * 1024
+            || entry.dir || entry.file === false || entry.file_type === 0) throw new Error('云端修订记录文件无效');
+        const file = path.join(scratch, entry.file_name);
+        await this.downloadFile(mountPath, RECORDS + '/' + entry.file_name, file, signal);
+        if ((await fs.stat(file)).size > 1024 * 1024) throw new Error('修订记录文件过大');
+        const record = parseRecordBytes(await fs.readFile(file));
+        if (record.revision_id + '.json' !== entry.file_name) throw new Error('修订编号与文件名不一致');
+        records.push(record);
+      }
+    } finally {
+      // Only remove files this invocation downloaded under its private directory.
+      for (const name of await fs.readdir(scratch)) await fs.unlink(path.join(scratch, name));
+      await fs.rmdir(scratch);
+    }
+    const heads = revisionHeads(records), checkpoint = path.join(this.dataDir, `revision-heads-${job.id}.json`);
+    for (const name of localNames) {
+      if (!records.some(r => r.revision_id + '.json' === name)) throw new Error('云端缺少已应用的修订历史');
+    }
+    let previous = {};
+    try { previous = JSON.parse(await fs.readFile(checkpoint, 'utf8')); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+    for (const [name, hash] of Object.entries(previous))
+      if (!records.some(r => r.path === name && r.sha256 === hash)) throw new Error(`云端缺少已应用的修订历史：${name}`);
+    for (const record of records) {
+      const file = await safeLocal(job.destination, `${RECORDS}/${record.revision_id}.json`, true);
+      try {
+        if (JSON.stringify(JSON.parse(await fs.readFile(file, 'utf8'))) !== JSON.stringify(record))
+          throw new Error('同编号修订记录已改变，保留本地文件');
+      } catch (e) { if (e.code !== 'ENOENT') throw e; await atomicJson(file, record); }
+    }
+    let updated = 0;
+    for (const [name, record] of heads) {
+      this.update(job.id, { phase: 'checking', current: `校验修订：${name}` });
+      const result = await installRevision(job.destination, record,
+        (rel, target, token) => this.downloadFile(mountPath, rel, target, token), signal);
+      if (result.updated) {
+        updated++;
+        this.log('info', 'revision', '修订文件已校验并替换，旧文件已留档',
+          { jobId: job.id, jobName: job.name, details: { path: name, revision: record.revision_id, sha256: record.sha256, backup: result.backup } });
+      }
+      previous[name] = record.sha256;
+      await atomicJson(checkpoint, previous);
+    }
+    return { paths: new Set(heads.keys()), updated };
   }
   async copy(job, mountPath, filesFile, password, signal) {
     return new Promise((resolve, reject) => {

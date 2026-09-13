@@ -97,3 +97,33 @@ test('stopping a real copy aborts it and never exposes an incomplete final file'
   await engine.copy({ id: 'fixture', destination: target }, '/fixture', manifest, password, new AbortController().signal);
   assert.deepEqual(await fs.readFile(path.join(target, 'big.bin')), await fs.readFile(path.join(source, 'big.bin')));
 });
+
+test('real revision download updates an existing archive and detects missing published history', { skip: !haveVendor, timeout: 60000 }, async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'archive-revision-engine-'));
+  const source = path.join(root, 'source'), target = path.join(root, 'target');
+  const crypto = require('node:crypto'), hash = text => crypto.createHash('sha256').update(text).digest('hex');
+  const record = { format: 'quark-file-revision', schema_version: 1, revision_id: 'fixture-1', path: '28.zip',
+    previous_sha256: hash('OLD'), sha256: hash('NEW'), size: 3, reason: 'Reviewed fixture', created_at: '2026-09-14T00:00:00Z',
+    content_path: '.sync-revisions/objects/' + hash('NEW') };
+  await fs.mkdir(path.join(source, '.sync-revisions/records'), { recursive: true });
+  await fs.mkdir(path.join(source, '.sync-revisions/objects')); await fs.mkdir(target);
+  await fs.writeFile(path.join(source, '.sync-revisions/records/fixture-1.json'), JSON.stringify(record));
+  await fs.writeFile(path.join(source, record.content_path), 'NEW');
+  await fs.writeFile(path.join(source, '28.zip'), 'OLD'); // an automatic backup can re-upload stale canonical bytes
+  await fs.writeFile(path.join(target, '28.zip'), 'OLD');
+  const engine = new Engine({ dataDir: path.join(root, 'data'), vendorDir, update() {}, async persist() {}, notify() {} });
+  t.after(async () => { await engine.close(); await fs.rm(root, { recursive: true, force: true }); });
+  await engine.start();
+  await engine.localApi('/api/admin/storage/create', { mount_path: '/fixture', driver: 'Local', order: 0, cache_expiration: 0,
+    addition: JSON.stringify({ root_folder_path: source, thumbnail: false, show_hidden: true }) });
+  engine.mount = async () => '/fixture';
+  const client = { list: async fid => Promise.all((await fs.readdir(fid, { withFileTypes: true })).map(async d =>
+    ({ fid: path.join(fid, d.name), file_name: d.name, file: !d.isDirectory(), size: (await fs.stat(path.join(fid, d.name))).size }))) };
+  const job = { id: 'fixture', destination: target };
+  assert.equal((await engine.applyRevisions(job, source, client, new AbortController().signal)).updated, 1);
+  assert.equal(await fs.readFile(path.join(target, '28.zip'), 'utf8'), 'NEW');
+  assert.equal(await fs.readFile(path.join(target, '.sync-recycle', record.previous_sha256, '28.zip'), 'utf8'), 'OLD');
+  assert.equal((await engine.applyRevisions(job, source, client, new AbortController().signal)).updated, 0);
+  await fs.unlink(path.join(source, '.sync-revisions/records/fixture-1.json'));
+  await assert.rejects(() => engine.applyRevisions(job, source, client, new AbortController().signal), /缺少已应用/);
+});
