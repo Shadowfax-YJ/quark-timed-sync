@@ -10,7 +10,8 @@ const OSS_UA = 'aliyun-sdk-js/6.6.1 Chrome 98.0.4758.80 on Windows 10 64-bit';
 
 async function sendObject(url, method, headers, body, signal) {
   return new Promise((resolve, reject) => {
-    const req = https.request(url, { method, signal, headers: { ...headers, 'Content-Length': body.length } }, res => {
+    const bounded = signal ? AbortSignal.any([signal, AbortSignal.timeout(60000)]) : AbortSignal.timeout(60000);
+    const req = https.request(url, { method, signal: bounded, headers: { ...headers, 'Content-Length': body.length } }, res => {
       let length = 0; const chunks = [];
       res.on('data', chunk => { length += chunk.length; if (length > 1024 * 1024) req.destroy(new Error('上传响应过大')); else chunks.push(chunk); });
       res.on('error', reject);
@@ -35,7 +36,7 @@ async function uploadQuark(quark, file, parent, name, signal, progress = () => {
     if (response.code !== 0 || response.status >= 400) throw new Error(`${endpoint} 被拒绝（${response.code}）`);
     return response;
   };
-  const mime = name.endsWith('.json') ? 'application/json' : 'application/zip';
+  const mime = name.endsWith('.json') ? 'application/json' : file.toLowerCase().endsWith('.zip') ? 'application/zip' : 'application/octet-stream';
   progress('申请上传');
   const prepared = await api('/file/upload/pre', { ccp_hash_update: true, dir_name: '', file_name: name,
     format_type: mime, l_created_at: Math.trunc(stat.mtimeMs), l_updated_at: Math.trunc(stat.mtimeMs), pdir_fid: parent, size: stat.size });
@@ -62,6 +63,7 @@ async function uploadQuark(quark, file, parent, name, signal, progress = () => {
           const date = new Date().toUTCString();
           const auth = await api('/file/upload/auth', { auth_info: pre.auth_info, task_id: pre.task_id,
             auth_meta: `PUT\n\n${mime}\n${date}\nx-oss-date:${date}\nx-oss-user-agent:${OSS_UA}\n/${pre.bucket}/${pre.obj_key}?partNumber=${part}&uploadId=${pre.upload_id}` });
+          if (part === 1 && attempt === 0 && Number.isFinite(auth.data.speed)) progress(`服务端上传速度参数：${auth.data.speed}`);
           const url = new URL(target); url.search = new URLSearchParams({ partNumber: part, uploadId: pre.upload_id });
           result = await transport(url, 'PUT', { Authorization: auth.data.auth_key, 'Content-Type': mime,
             Referer: 'https://pan.quark.cn/', 'x-oss-date': date, 'x-oss-user-agent': OSS_UA }, bytes, signal);
