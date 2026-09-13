@@ -41,7 +41,7 @@ test('own share with an ambiguous virtual root requires selecting a folder', asy
 });
 
 test('real embedded server and rclone preserve old content; quit kills children', { skip: !haveVendor, timeout: 60000 }, async t => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'archive-engine-'));
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'archive-engine-')));
   const source = path.join(root, 'source'), target = path.join(root, 'target');
   await fs.mkdir(path.join(source, 'nested'), { recursive: true }); await fs.mkdir(target);
   await fs.writeFile(path.join(source, 'old.txt'), 'cloud changed');
@@ -75,7 +75,7 @@ test('real embedded server and rclone preserve old content; quit kills children'
 });
 
 test('stopping a real copy aborts it and never exposes an incomplete final file', { skip: !haveVendor, timeout: 60000 }, async t => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'archive-cancel-'));
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'archive-cancel-')));
   const source = path.join(root, 'source'), target = path.join(root, 'target');
   await fs.mkdir(source); await fs.mkdir(target);
   await fs.writeFile(path.join(source, 'big.bin'), Buffer.alloc(2 * 1024 * 1024, 71));
@@ -99,7 +99,7 @@ test('stopping a real copy aborts it and never exposes an incomplete final file'
 });
 
 test('real revision download updates an existing archive and detects missing published history', { skip: !haveVendor, timeout: 60000 }, async t => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'archive-revision-engine-'));
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'archive-revision-engine-')));
   const source = path.join(root, 'source'), target = path.join(root, 'target');
   const crypto = require('node:crypto'), hash = text => crypto.createHash('sha256').update(text).digest('hex');
   const record = { format: 'quark-file-revision', schema_version: 1, revision_id: 'fixture-1', path: '28.zip',
