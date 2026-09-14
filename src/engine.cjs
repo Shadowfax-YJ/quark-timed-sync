@@ -4,6 +4,7 @@ const path = require('node:path');
 const net = require('node:net');
 const { spawn } = require('node:child_process');
 const crypto = require('node:crypto');
+const { isDeepStrictEqual } = require('node:util');
 const { atomicJson, prepareFiles, reconcileShare, copyArgs } = require('./model.cjs');
 const { delay, abortError } = require('./quark.cjs');
 const { revisionHeads, installRevision, safeLocal, RECORDS, parseRecordBytes } = require('./revisions.cjs');
@@ -205,6 +206,7 @@ class Engine {
       '--no-gzip-encoding', '--header-download', 'Accept-Encoding: identity'], { env, signal });
   }
   async applyRevisions(job, fid, client, signal) {
+    this.update(job.id, { phase: 'checking', current: '读取云端修订目录' });
     // Local records also anchor history when the application profile is moved.
     const localRecordDirectory = path.dirname(await safeLocal(job.destination, RECORDS + '/probe.json'));
     const localNames = await fs.readdir(localRecordDirectory).catch(e => { if (e.code === 'ENOENT') return []; throw e; });
@@ -224,18 +226,37 @@ class Engine {
     }
     const entries = await client.list(parent, signal);
     if (entries.length > 10000) throw new Error('修订记录过多，请缩小订阅范围');
+    // Backup clients may add "(1)" to an identical publication. Require the
+    // canonical record too, and compare all decoded fields before deduplicating.
+    // Preflight the entire listing before starting potentially slow downloads.
+    const names = new Set(), publications = entries.map(entry => {
+      const match = typeof entry.file_name === 'string'
+        && /^([a-zA-Z0-9_-]{1,100})( ?\([1-9][0-9]{0,5}\))?\.json$/.exec(entry.file_name);
+      if (!match || entry.size > 1024 * 1024 || entry.dir || entry.file === false || entry.file_type === 0)
+        throw new Error(`云端修订记录文件无效：${entry.file_name}`);
+      if (names.has(entry.file_name)) throw new Error(`云端修订记录文件名重复：${entry.file_name}`);
+      names.add(entry.file_name);
+      return { entry, id: match[1], copy: Boolean(match[2]) };
+    });
+    for (const item of publications)
+      if (item.copy && !names.has(item.id + '.json')) throw new Error(`修订副本缺少原记录：${item.entry.file_name}`);
+    publications.sort((a, b) => Number(a.copy) - Number(b.copy));
     const mountPath = await this.mount(job, fid, signal), records = [];
+    const byId = new Map();
     const scratch = await fs.mkdtemp(path.join(this.dataDir, 'revision-read-'));
     try {
-      for (const entry of entries) {
-        if (!/^[a-zA-Z0-9_-]{1,100}\.json$/.test(entry.file_name) || entry.size > 1024 * 1024
-            || entry.dir || entry.file === false || entry.file_type === 0) throw new Error('云端修订记录文件无效');
+      for (const [number, { entry, id, copy }] of publications.entries()) {
+        this.update(job.id, { phase: 'checking', current: `校验修订记录 ${number + 1}/${publications.length}：${entry.file_name}` });
         const file = path.join(scratch, entry.file_name);
         await this.downloadFile(mountPath, RECORDS + '/' + entry.file_name, file, signal);
         if ((await fs.stat(file)).size > 1024 * 1024) throw new Error('修订记录文件过大');
         const record = parseRecordBytes(await fs.readFile(file));
-        if (record.revision_id + '.json' !== entry.file_name) throw new Error('修订编号与文件名不一致');
-        records.push(record);
+        if (record?.revision_id !== id) throw new Error(`修订编号与文件名不一致：${entry.file_name}`);
+        if (copy) {
+          if (!isDeepStrictEqual(byId.get(id), record)) throw new Error(`修订副本内容冲突，保留本地文件：${entry.file_name}`);
+          this.log('info', 'revision', '修订记录相同副本已核对，按一条记录处理',
+            { jobId: job.id, jobName: job.name, details: { file: entry.file_name, revision: id } });
+        } else { byId.set(id, record); records.push(record); }
       }
     } finally {
       // Only remove files this invocation downloaded under its private directory.
