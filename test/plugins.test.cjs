@@ -68,3 +68,98 @@ test('timeout, malformed protocol and unavailable executable return retry; no sh
   assert.equal((await invoke(wrong, request)).status, 'retry');
   assert.throws(() => validatePlugin({ ...config, command: ['relative.exe'] }));
 });
+
+test('plugin progress is decoded across UTF-8 chunks and bound to this invocation', async t => {
+  const { config } = await fixture(t);
+  const script = `let input='';process.stdin.on('data',b=>input+=b);process.stdin.on('end',()=>{
+    const r=JSON.parse(input);
+    process.stderr.write('PLUGIN_PROGRESS '+JSON.stringify({event_id:'other',message:'wrong event'})+'\\n');
+    process.stderr.write('PLUGIN_PROGRESS '+JSON.stringify({event_id:r.event_id,invocation_id:'old-attempt',message:'stale'})+'\\n');
+    process.stderr.write('PLUGIN_PROGRESS {invalid}\\n');
+    const b=Buffer.from('PLUGIN_PROGRESS '+JSON.stringify({event_id:r.event_id,invocation_id:r.invocation_id,message:'快照对象：12/100'})+'\\n');
+    const split=b.indexOf(Buffer.from('快'))+1;process.stderr.write(b.subarray(0,split));
+    setTimeout(()=>{process.stderr.write(b.subarray(split));console.log(JSON.stringify({protocol_version:1,event_id:r.event_id,status:'ok',message:'done'}));},30);
+  });`;
+  const received = [];
+  const result = await invoke({ ...config, command: [process.execPath, '-e', script] },
+    { event_id: 'progress-test', invocation_id: 'attempt-1' }, undefined, value => received.push(value));
+  assert.equal(result.status, 'ok');
+  assert.deepEqual(received.map(value => value.message), ['快照对象：12/100']);
+});
+
+test('running progress wins over a later queued rescan and an earlier retry message', async t => {
+  const { root, job } = await fixture(t);
+  const manager = new PluginManager({ dataDir: root, getJobs: () => [job] });
+  t.after(() => manager.close());
+  await manager.init();
+  const first = [...manager.events.values()][0];
+  await manager.save({ ...first, status: 'running', startedAt: Date.now() - 10000,
+    progress: { message: '快照对象：12/100', updatedAt: Date.now() }, result: { message: '插件执行已取消，等待重试' } });
+  await manager.settled(job, { outcome: 'success', run_id: 'new-files' });
+  const state = manager.status(job.id)[0];
+  assert.equal(state.status, 'running');
+  assert.equal(state.message, '快照对象：12/100');
+  assert.equal(state.pending, 1);
+  assert.ok(state.elapsedSeconds >= 10);
+});
+
+test('restart folds legacy duplicate pending scans into one and does not add another', async t => {
+  const { root, job } = await fixture(t);
+  let manager = new PluginManager({ dataDir: root, getJobs: () => [job] });
+  await manager.init();
+  const first = [...manager.events.values()][0];
+  await manager.save({ ...first, status: 'running', attempts: 1 });
+  await manager.save({ ...first, key: 'a'.repeat(64), createdAt: first.createdAt + 1, status: 'queued' });
+  await manager.close();
+  manager = new PluginManager({ dataDir: root, getJobs: () => [job] });
+  t.after(() => manager.close());
+  await manager.init();
+  const pending = [...manager.events.values()].filter(e => ['queued', 'retry', 'running'].includes(e.status));
+  assert.equal(pending.length, 1);
+  await manager.pump();
+  assert.equal(manager.status(job.id)[0].status, 'ok');
+  assert.equal(manager.status(job.id)[0].pending, 0);
+});
+
+test('multiple arrivals during a run keep one follow-up scan with the latest input', async t => {
+  const { root, job } = await fixture(t);
+  const manager = new PluginManager({ dataDir: root, getJobs: () => [job] });
+  t.after(() => manager.close());
+  await manager.init();
+  const first = [...manager.events.values()][0];
+  await manager.save({ ...first, status: 'running' });
+  await Promise.all(Array.from({ length: 5 }, (_, i) =>
+    manager.settled(job, { outcome: 'success', run_id: 'new-' + i })));
+  const pending = [...manager.events.values()].filter(e => ['queued', 'retry'].includes(e.status));
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0].request.input.run_id, 'new-4');
+  assert.equal(manager.events.get(first.key).status, 'running');
+});
+
+test('real child progress is visible and persisted before completion; cancellation merges follow-up', async t => {
+  const { root, config, job } = await fixture(t);
+  const script = `let input='';process.stdin.on('data',b=>input+=b);process.stdin.on('end',()=>{
+    const r=JSON.parse(input);process.stderr.write('PLUGIN_PROGRESS '+JSON.stringify({event_id:r.event_id,message:'校验对象：25/100'})+'\\n');
+    setInterval(()=>{},1000);
+  });`;
+  job.plugins = [{ ...config, command: [process.execPath, '-e', script], timeout_seconds: 10 }];
+  const manager = new PluginManager({ dataDir: root, getJobs: () => [job] });
+  t.after(() => manager.close());
+  await manager.init();
+  const pumping = manager.pump();
+  const deadline = Date.now() + 5000;
+  while (manager.status(job.id)[0].message !== '校验对象：25/100' && Date.now() < deadline)
+    await new Promise(resolve => setTimeout(resolve, 20));
+  const state = manager.status(job.id)[0];
+  assert.equal(state.status, 'running'); assert.equal(state.pending, 0);
+  assert.equal(state.message, '校验对象：25/100');
+  const event = [...manager.events.values()].find(e => e.status === 'running');
+  const persisted = JSON.parse(await fs.readFile(path.join(root, 'plugins/outbox', event.key + '.json'), 'utf8'));
+  assert.equal(persisted.progress.message, state.message);
+  assert.equal(persisted.result, null);
+  await manager.settled(job, { outcome: 'success', run_id: 'arrived-during-check' });
+  manager.cancel(job.id); await pumping;
+  const waiting = [...manager.events.values()].filter(e => ['queued', 'retry'].includes(e.status));
+  assert.equal(waiting.length, 1);
+  assert.equal(waiting[0].request.input.run_id, 'arrived-during-check');
+});

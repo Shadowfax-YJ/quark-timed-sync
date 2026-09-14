@@ -9,6 +9,7 @@ function element(tag, className, text) { const el = document.createElement(tag);
 function button(text, handler, className = 'subtle') { const el = element('button', className, text); el.addEventListener('click', () => Promise.resolve(handler()).catch(() => {})); return el; }
 function bytes(value) { if (!value) return '0 B'; const unit = Math.min(3, Math.floor(Math.log(value) / Math.log(1024))); return (value / 1024 ** unit).toFixed(unit ? 1 : 0) + ' ' + ['B', 'KB', 'MB', 'GB'][unit]; }
 function time(value) { return value ? new Date(value).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : '首次检查'; }
+function elapsed(seconds) { return seconds >= 60 ? `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒` : `${seconds} 秒`; }
 function jobCard(job) {
   const live = job.state || {}, paused = state.paused || !job.enabled, active = ['checking', 'saving', 'downloading'].includes(live.phase);
   const card = element('article', 'job'); card.dataset.job = job.id;
@@ -23,7 +24,10 @@ function jobCard(job) {
   if (paused && !active) statusText = '订阅已暂停，已有文件保留。也可以手动检查一次。';
   status.append(element('span', live.phase === 'error' ? 'error' : '', statusText)); card.append(status);
   for (const plugin of job.pluginStatus || []) {
-    const text = `${plugin.id} · ${plugin.message}${plugin.pending ? ` · 待处理 ${plugin.pending}` : ''}`;
+    const running = plugin.status === 'running' ? `正在处理 · 已运行 ${elapsed(plugin.elapsedSeconds || 0)} · ` : '';
+    const stale = plugin.status === 'running' && plugin.progressUpdatedAt && Date.now() - plugin.progressUpdatedAt >= 15000
+      ? ` · 上次进度 ${elapsed(Math.floor((Date.now() - plugin.progressUpdatedAt) / 1000))}前` : '';
+    const text = `${plugin.id} · ${running}${plugin.message}${stale}${plugin.pending ? ` · 排队 ${plugin.pending}` : ''}`;
     card.append(element('div', 'job-status' + (['rejected', 'unsupported'].includes(plugin.status) ? ' error' : ''), text));
   }
   if (active) { const bar = element('div', 'progress'), progress = document.createElement('progress'); if (live.totalBytes > 0) { progress.max = live.totalBytes; progress.value = live.bytes || 0; } bar.append(progress); card.append(bar); }

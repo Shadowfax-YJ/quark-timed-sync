@@ -10,6 +10,16 @@
 
 请求使用 protocol_version=1、plugin_id/version、event_id、invocation_id、Unix 秒 deadline、hook=sync.settled、state_dir、input（root/job_id/source_kind/outcome/run_id）。outcome 为 success、partial_failure、cancelled、recovered 或 manual；它描述同步状态，不宣称目录已验证。响应必须原样返回协议和事件 ID，状态为 ok/retry/unsupported/rejected。输出和诊断各限制 1 MiB，不转发账号凭据。
 
+从 1.4.1 起，插件可向 stderr 输出逐行 `PLUGIN_PROGRESS {"event_id":"…","invocation_id":"…","message":"…"}`。
+event_id 必须匹配本次请求；invocation_id 可选，提供时也必须匹配。宿主正确处理 UTF-8 跨块、忽略无效行，
+单行上限 16 KiB、message 上限 2000 字符。此通道只更新进度，不能替代 stdout 的最终结果。
+运行状态、开始时间及最近进度保存到 outbox；卡片优先显示正在运行的任务、阶段进度和耗时，排队数不包含运行项或已拒绝项。
+
+`sync.settled` 是对当前订阅目录重新扫描的通知。同一订阅、目录和插件配置的未开始通知合并为一次扫描；
+运行期间有新通知时最多保留一次后续扫描，避免漏掉正在校验时才下载完成的文件。
+重启合并旧队列中的重复待处理记录，原记录以内部状态 `superseded` 留存；此状态不是插件响应状态。
+手动重试不重新激活全部历史成功任务，不同目录或插件配置不合并。
+
 事件按稳定 ID 与配置摘要保存到用户数据 `plugins/outbox/`，插件状态在 `plugins/state/<job>/<plugin>/`。失败自动退避，终止状态可手动重试；重启扫描覆盖落地后未登记事件的窗口。文件异常或插件失败不回滚已完成下载。协议只包含明确需要的输入，未启用插件不增加外部运行时依赖。
 
 ## 当前约束
