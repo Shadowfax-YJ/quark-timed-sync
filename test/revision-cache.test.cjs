@@ -127,11 +127,12 @@ test('engine forwards full verification and retains the reuse summary after a ze
   const f=await fixture(t),forces=[],states=[];
   const engine=new Engine({dataDir:f.root,quark:{list:async()=>[]},update:(_id,s)=>states.push(s),log(){},persist:async()=>{},notify(){}});
   engine.applyRevisions=async(_job,_fid,_client,_signal,options)=>{
-    forces.push(options.force);return{paths:new Set(),updated:0,summary:'修订记录复用 1/1，文件复用 1/1，更新 0'};
+    forces.push(options.force);return{paths:new Set(['28.zip']),updated:0,summary:'修订记录复用 1/1，文件复用 1/1，更新 0'};
   };
   const job={...f.job,source:{kind:'drive',fid:'root'},revisionUpdates:true,interval:60};
   await engine.run(job);await engine.run(job,{forceRevisions:true});
   assert.deepEqual(forces,[false,true]);assert.match(states.at(-1).current,/没有新增文件.*文件复用 1\/1/);
+  assert.equal(states.at(-1).skipped,1);assert.match(states.at(-1).current,/已跳过 1 个已有文件/);
 });
 test('cached verification does not bypass pending audit recovery or missing target repair',async t=>{
   const f=await fixture(t);await f.apply();f.reset();

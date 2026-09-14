@@ -157,7 +157,10 @@ class Engine {
         : { fid: job.source.fid, client: this.quark };
       const revised = job.revisionUpdates ? await this.applyRevisions(job, fid, client, signal, {force:forceRevisions}) : { paths: new Set(), updated: 0 };
       const plan = await prepareFiles(client, fid, job.destination, signal, progress => this.update(job.id, progress), revised.paths);
-      this.log('info', 'subscription', `检查完成：新增 ${plan.files.length} 个，跳过 ${plan.skipped} 个已有文件`, { ...context, details: { added: plan.files.length, skipped: plan.skipped, totalBytes: plan.totalBytes } });
+      // The ordinary scan excludes paths already handled by revision checks.
+      // Include verified unchanged revisions in the final existing-file total.
+      const skipped = plan.skipped + revised.paths.size - revised.updated;
+      this.log('info', 'subscription', `检查完成：新增 ${plan.files.length} 个，跳过 ${skipped} 个已有文件`, { ...context, details: { added: plan.files.length, skipped, revised:revised.updated, totalBytes: plan.totalBytes } });
       if (plan.files.length) {
         const mountPath = await this.mount(job, fid, signal);
         filesFile = path.join(this.dataDir, 'files-' + job.id + '.txt');
@@ -169,8 +172,8 @@ class Engine {
       if (signal.aborted) throw abortError();
       job.lastSuccess = new Date().toISOString(); job.lastCount = plan.files.length + revised.updated; job.lastError = '';
       settlement.outcome = 'success';
-      this.update(job.id, { phase: 'idle', current: (plan.files.length ? `已下载 ${plan.files.length} 个新文件` : `没有新增文件，已跳过 ${plan.skipped} 个已有文件`)
-        + (revised.summary ? `；${revised.summary}` : ''), transferred: plan.files.length });
+      this.update(job.id, { phase: 'idle', current: (plan.files.length ? `已下载 ${plan.files.length} 个新文件` : `没有新增文件，已跳过 ${skipped} 个已有文件`)
+        + (revised.summary ? `；${revised.summary}` : ''), skipped, transferred: plan.files.length });
       this.log('info', 'subscription', plan.files.length ? `订阅完成，已下载 ${plan.files.length} 个新文件` : '本次订阅检查完成，没有新增文件', { ...context, details: { downloaded: plan.files.length, durationMs: Date.now() - started } });
       if (plan.files.length) this.notify('下载完成', `${job.name}：已下载 ${plan.files.length} 个新文件`);
       if (revised.updated) {
