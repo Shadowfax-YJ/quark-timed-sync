@@ -56,7 +56,9 @@ async function publishRevision(record, packageFile, store, { publish = false, si
   if (await store.hash(record.path) !== record.sha256) throw new Error('云端同名修订包校验失败');
   // Publish the immutable record last. Sync clients cannot see a partial revision.
   progress('提交修订记录');
-  await store.writeRecord(`${RECORDS}/${record.revision_id}.json`, record);
+  // A lost success response can leave the record committed already. Re-uploading
+  // it may create a numbered copy on the provider even when its bytes are equal.
+  if (!existing) await store.writeRecord(`${RECORDS}/${record.revision_id}.json`, record);
   const committed = (await store.records()).find(r => r.revision_id === record.revision_id);
   if (!committed || JSON.stringify(committed) !== JSON.stringify(record)) throw new Error('云端修订记录回读不一致');
   return { status: 'published', path: record.path, sha256: record.sha256, recycle_path: recycled };

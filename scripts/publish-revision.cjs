@@ -108,9 +108,13 @@ app.whenReady().then(async () => {
   const store = {
     records: async () => {
       const fid = await folder(RECORDS); if (!fid) return [];
-      const result = [];
-      for (const item of await quark.list(fid)) {
-        if (!/^[a-zA-Z0-9_-]+\.json$/.test(item.file_name) || isDir(item) || item.size > 1024 * 1024) throw new Error('修订记录文件异常');
+      const result = [], entries = await quark.list(fid);
+      // Diagnose invalid metadata before downloading the complete history.
+      for (const item of entries) {
+        if (!/^[a-zA-Z0-9_-]+\.json$/.test(item.file_name) || isDir(item) || item.size > 1024 * 1024)
+          throw new Error(`修订记录文件异常：${item.file_name}`);
+      }
+      for (const item of entries) {
         const key = item.fid + ':' + item.size + ':' + (item.updated_at || '');
         if (recordCache.has(key)) { result.push(recordCache.get(key)); continue; }
         const file = await download(RECORDS + '/' + item.file_name);

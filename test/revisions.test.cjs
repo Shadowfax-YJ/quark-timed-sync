@@ -106,6 +106,26 @@ test('publication interrupted after recycling resumes without losing either vers
   assert.equal(store.recordsList.length, 0); assert.equal(await store.hash(r.recycle_path), r.previous_sha256);
   store.move = move; await publishRevision(r, packageFile, store, { publish: true }); assert.equal(await store.hash(r.path), r.sha256);
 });
+test('lost publication acknowledgement resumes without uploading the immutable record again', async t => {
+  const root = await temp(t), packageFile = path.join(root, 'new.zip'); await fs.writeFile(packageFile, 'corrected');
+  const r = record(), store = cloud(r), write = store.writeRecord;
+  let writes = 0;
+  store.writeRecord = async (key, value) => {
+    writes++;
+    if (writes > 1) throw new Error('provider would create a numbered duplicate');
+    await write(key, value);
+    throw new Error('publication response lost after cloud commit');
+  };
+  await assert.rejects(publishRevision(r, packageFile, store, { publish: true }), /response lost/);
+  assert.equal(store.recordsList.length, 1);
+  const mutations = store.operations.length;
+  assert.equal((await publishRevision(r, packageFile, store, { publish: true })).status, 'published');
+  assert.equal(writes, 1);
+  assert.equal(store.operations.length, mutations);
+  store.files.set(r.path, Buffer.from('externally changed'));
+  await assert.rejects(publishRevision(r, packageFile, store, { publish: true }), /SHA256/);
+  assert.equal(store.operations.length, mutations);
+});
 test('cloud corruption never publishes a record or moves the original', async t => {
   const root = await temp(t), packageFile = path.join(root, 'new.zip'); await fs.writeFile(packageFile, 'corrected');
   const r = record(), store = cloud(r); store.upload = async (_file, key) => store.files.set(key, Buffer.from('corrupt'));

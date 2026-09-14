@@ -55,6 +55,9 @@ electron scripts/publish-revision.cjs --job SUBSCRIPTION_ID --record revision.js
 `{"schema_version":1,"items":[{"record":"绝对路径/revision.json","package":"绝对路径/revised.zip"}]}`。
 每个原路径只出现一次，并发限制为 1～4；成功逐条写入日志，失败项保留错误，可用同一批次重试。
 同一编号的记录和对象保持不可变；原包移动后中断也能续接，不需要先删除任何文件。
+记录提交成功但回执丢失时，续传重新核对记录内容、当前包、固定对象与回收原件，
+已存在且完全一致的记录不再次上传，避免网盘生成编号副本。发布脚本先检查记录目录元数据，
+异常时报告具体文件名，不等全部历史记录下载后才报错。
 
 如果环境代理使对象上传持续超时，维护命令可加 `--direct-upload`，仅在该进程为
 夸克/UC API 和阿里云对象域名追加 NO_PROXY，不改变系统代理或 GUI 设置。
