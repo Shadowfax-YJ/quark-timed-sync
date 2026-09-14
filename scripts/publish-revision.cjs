@@ -7,6 +7,7 @@ const { Quark, delay } = require('../src/quark.cjs');
 const { Engine } = require('../src/engine.cjs');
 const { publishRevision } = require('../src/revision-publisher.cjs');
 const { parseApproval, checkBatch, publishApproval } = require('../src/approval-feed.cjs');
+const { RevisionCache } = require('../src/revision-cache.cjs');
 const { relative, hashFile, RECORDS, parseRecordBytes } = require('../src/revisions.cjs');
 const args = process.argv.slice(2), arg = name => args[args.indexOf(name) + 1];
 // Scope optional proxy bypass to this maintenance process and the provider's
@@ -41,6 +42,9 @@ app.whenReady().then(async () => {
     if (!approvalOnly) checkBatch(approval, entries.map(item => item.revision));
   }
   const quark = new Quark(JSON.parse(safeStorage.decryptString(await fs.readFile(path.join(profile, 'credentials.bin')))));
+  // Approval-only publication can reuse the GUI's verified metadata receipts.
+  // Read this cache without saving it, so a running GUI retains ownership.
+  const approvedRecordCache = approvalOnly ? await RevisionCache.open(profile, job, job.source.fid) : null;
   engine = new Engine({ dataDir: path.join(scratch, 'service-data'), vendorDir: path.join(__dirname, '..', 'vendor', `${process.platform}-${process.arch}`),
     quark, update() {}, async persist() {}, notify() {} });
   await fs.mkdir(engine.dataDir, { recursive: true });
@@ -121,14 +125,26 @@ app.whenReady().then(async () => {
         if (!/^[a-zA-Z0-9_-]+\.json$/.test(item.file_name) || isDir(item) || item.size > 1024 * 1024)
           throw new Error(`修订记录文件异常：${item.file_name}`);
       }
-      for (const item of entries) {
+      let scanned = 0;
+      const readRecord = async item => {
         const key = item.fid + ':' + item.size + ':' + (item.updated_at || '');
-        if (recordCache.has(key)) { result.push(recordCache.get(key)); continue; }
+        const cached = recordCache.get(key) || approvedRecordCache?.record(item, item.file_name.slice(0, -5));
+        if (cached) return cached;
         const file = await download(RECORDS + '/' + item.file_name);
         try {
           const bytes = await fs.readFile(file);
-          const record = parseRecordBytes(bytes); recordCache.set(key, record); result.push(record);
+          const record = parseRecordBytes(bytes); recordCache.set(key, record); return record;
         } finally { await fs.unlink(file); }
+      };
+      const width = approvalOnly ? 4 : 1;
+      for (let start = 0; start < entries.length; start += width) {
+        const values = await Promise.allSettled(entries.slice(start, start + width).map(readRecord));
+        const failed = values.find(value => value.status === 'rejected');
+        if (failed) throw failed.reason;
+        result.push(...values.map(value => value.value));
+        scanned += values.length;
+        if (approvalOnly && (scanned === entries.length || scanned % 40 === 0))
+          console.log(JSON.stringify({phase: 'approval_records', verified: scanned, total: entries.length, reused: approvedRecordCache.recordHits}));
       }
       return result;
     },
