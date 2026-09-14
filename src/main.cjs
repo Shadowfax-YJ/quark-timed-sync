@@ -94,11 +94,11 @@ async function setPaused(paused) {
   else for (const job of config.jobs) if (job.enabled) job.nextRun = Date.now();
   await persist(); log('info', 'subscription', paused ? '已暂停全部订阅' : '已恢复全部订阅'); if (!paused) tick();
 }
-async function runJob(job) {
+async function runJob(job, options = {}) {
   if (!loggedIn) throw new Error('请先扫码登录夸克');
-  if (smoke) { update(job.id, { phase: 'idle', current: '没有新增文件，已跳过 348 个已有文件', skipped: 348 }); return; }
+  if (smoke) { update(job.id, { phase: 'idle', current: options.forceRevisions ? '完整校验修订已完成' : '没有新增文件，已跳过 348 个已有文件', skipped: 348 }); return; }
   if (engine.running) throw new Error('已有订阅正在运行');
-  await engine.run(job); emit();
+  await engine.run(job, options); emit();
 }
 async function checkAll() {
   const generation = pauseGeneration;
@@ -273,11 +273,12 @@ function setupIPC() {
     plugins.cancel(id);
     log('info', 'subscription', '已移除订阅，已有文件保留', jobContext(job));
   });
-  register('check-job', async id => {
+  register('check-job', async (id, forceRevisions = false) => {
     const job = config.jobs.find(x => x.id === id); if (!job) throw new Error('订阅不存在');
+    if (typeof forceRevisions !== 'boolean' || (forceRevisions && !job.revisionUpdates)) throw new Error('修订校验设置无效');
     if (engine.running) throw new Error('已有订阅正在运行');
-    log('info', 'subscription', '手动检查订阅', jobContext(job));
-    runJob(job).catch(err => update(id, { phase: 'error', error: safeError(err), current: safeError(err) }));
+    log('info', 'subscription', forceRevisions ? '手动完整校验修订' : '手动检查订阅', jobContext(job));
+    runJob(job, {forceRevisions}).catch(err => update(id, { phase: 'error', error: safeError(err), current: safeError(err) }));
   });
   register('set-interval', async (id, value) => {
     const job = config.jobs.find(x => x.id === id), interval = Number(value);
@@ -404,6 +405,8 @@ async function smokeTest() {
   assert(JSON.parse(await fs.readFile(stateFile, 'utf8')).jobs[0].revisionUpdates === true, 'revision flag missing on disk');
   await evaluate("window.location.reload()"); await delay(500);
   assert(await evaluate("document.querySelector('.job .check-help input[type=checkbox]').checked"), 'revision option lost on reload');
+  await evaluate("document.querySelector('.job [data-action=verify-revisions]').click()"); await delay(100);
+  assert(states.get(config.jobs[0].id)?.current === '完整校验修订已完成', 'full revision verification did not reach the engine option');
   await evaluate("document.querySelector('#add-subscription').click()"); await delay(100);
   assert(!(await evaluate("document.querySelector('#revision-updates').checked")), 'new subscriptions inherited revision mode');
   await evaluate("document.querySelector('[data-mode=share]').click(); document.querySelector('#share-url').value='https://pan.quark.cn/s/test123?pwd=ABCD'; document.querySelector('#read-share').click()");

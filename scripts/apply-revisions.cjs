@@ -20,7 +20,7 @@ app.whenReady().then(async () => {
     quark, update(_id, state) { if (state.current) console.log(state.current); }, async persist() {}, notify() {} });
   await fs.mkdir(engine.dataDir, { recursive: true });
   const signal = new AbortController().signal;
-  const first = await engine.applyRevisions(job, job.source.fid, quark, signal);
+  const first = await engine.applyRevisions(job, job.source.fid, quark, signal, {force:args.includes('--force')});
   console.log(JSON.stringify({ pass: 1, updated: first.updated, paths: [...first.paths] }));
   if (args.includes('--verify-repeat')) {
     const second = await engine.applyRevisions(job, job.source.fid, quark, signal);

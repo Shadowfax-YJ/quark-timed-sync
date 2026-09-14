@@ -44,6 +44,12 @@ function jobCard(job) {
     button('后处理插件', () => call('configure-plugin', job.id)),
     button(job.enabled ? '暂停' : '恢复', () => call('toggle-job', job.id)),
     button('×', () => { removeId = job.id; $('remove-dialog').showModal(); }, 'icon-button'));
+  if (job.revisionUpdates) {
+    const verify = button('完整校验修订', () => call('check-job', job.id, true));
+    verify.dataset.action = 'verify-revisions'; verify.disabled = state.busy || !state.loggedIn;
+    verify.title = '重新读取全部修订记录和对应文件；日常检查自动复用未变化的校验结果';
+    actions.append(verify);
+  }
   if (job.plugins?.length) actions.append(button('重试后处理', () => call('retry-plugins', job.id)),
     button('禁用后处理', () => call('disable-plugins', job.id)));
   bottom.append(timing, actions); card.append(bottom); return card;

@@ -82,11 +82,12 @@ async function safeLocal(root, rel, createParents = false) {
   if (s && (!s.isFile() || s.isSymbolicLink())) throw new Error('修订目标不是普通文件');
   return target;
 }
-async function installRevision(root, record, download, signal) {
+async function installRevision(root, record, download, signal, verification) {
   validateRecord(record);
   const destination = await safeLocal(root, record.path, true);
   const before = await statOrNull(destination);
-  const oldHash = before ? await hashFile(destination, signal) : null;
+  const checkedHash = () => verification ? verification.hash(destination, record.sha256, signal) : hashFile(destination, signal);
+  const oldHash = before ? await checkedHash() : null;
   const pending = await safeLocal(root, `.sync-revisions/pending/${record.revision_id}.json`, true);
   const applied = await safeLocal(root, `.sync-revisions/applied/${record.revision_id}.json`, true);
   if (oldHash === record.sha256 && before.size === record.size) {
@@ -127,6 +128,9 @@ async function installRevision(root, record, download, signal) {
     await fs.rename(temporary, destination);
     await atomicJson(applied, { ...journal, applied_at: new Date().toISOString() });
     await fs.unlink(pending);
+    // Establish a receipt for the final file after rename, not for its staging
+    // inode before installation. Concurrent edits cannot inherit verification.
+    if (verification && await checkedHash() !== record.sha256) throw new Error('替换后本地文件发生变化，下次检查将重试');
     return { updated: true, path: record.path, backup };
   } finally { await fs.unlink(temporary).catch(e => { if (e.code !== 'ENOENT') throw e; }); }
 }

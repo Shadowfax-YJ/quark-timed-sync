@@ -8,6 +8,7 @@ const { isDeepStrictEqual } = require('node:util');
 const { atomicJson, prepareFiles, reconcileShare, copyArgs } = require('./model.cjs');
 const { delay, abortError } = require('./quark.cjs');
 const { revisionHeads, installRevision, safeLocal, RECORDS, parseRecordBytes } = require('./revisions.cjs');
+const { RevisionCache } = require('./revision-cache.cjs');
 
 async function availablePort() {
   return new Promise((resolve, reject) => {
@@ -142,7 +143,7 @@ class Engine {
       });
     return { fid: job.source.targetFid, client: this.quark };
   }
-  async run(job) {
+  async run(job, {forceRevisions = false} = {}) {
     if (this.running) throw new Error('已有订阅正在运行，请稍后再试');
     this.running = true; this.controller = new AbortController();
     const signal = this.controller.signal;
@@ -154,7 +155,7 @@ class Engine {
       this.update(job.id, { phase: 'checking', error: '', current: '连接夸克', discovered: 0, skipped: 0, transferred: 0, bytes: 0 });
       const { fid, client } = job.source.kind === 'share' ? await this.shareRoot(job, signal)
         : { fid: job.source.fid, client: this.quark };
-      const revised = job.revisionUpdates ? await this.applyRevisions(job, fid, client, signal) : { paths: new Set(), updated: 0 };
+      const revised = job.revisionUpdates ? await this.applyRevisions(job, fid, client, signal, {force:forceRevisions}) : { paths: new Set(), updated: 0 };
       const plan = await prepareFiles(client, fid, job.destination, signal, progress => this.update(job.id, progress), revised.paths);
       this.log('info', 'subscription', `检查完成：新增 ${plan.files.length} 个，跳过 ${plan.skipped} 个已有文件`, { ...context, details: { added: plan.files.length, skipped: plan.skipped, totalBytes: plan.totalBytes } });
       if (plan.files.length) {
@@ -168,7 +169,8 @@ class Engine {
       if (signal.aborted) throw abortError();
       job.lastSuccess = new Date().toISOString(); job.lastCount = plan.files.length + revised.updated; job.lastError = '';
       settlement.outcome = 'success';
-      this.update(job.id, { phase: 'idle', current: plan.files.length ? `已下载 ${plan.files.length} 个新文件` : `没有新增文件，已跳过 ${plan.skipped} 个已有文件`, transferred: plan.files.length });
+      this.update(job.id, { phase: 'idle', current: (plan.files.length ? `已下载 ${plan.files.length} 个新文件` : `没有新增文件，已跳过 ${plan.skipped} 个已有文件`)
+        + (revised.summary ? `；${revised.summary}` : ''), transferred: plan.files.length });
       this.log('info', 'subscription', plan.files.length ? `订阅完成，已下载 ${plan.files.length} 个新文件` : '本次订阅检查完成，没有新增文件', { ...context, details: { downloaded: plan.files.length, durationMs: Date.now() - started } });
       if (plan.files.length) this.notify('下载完成', `${job.name}：已下载 ${plan.files.length} 个新文件`);
       if (revised.updated) {
@@ -205,7 +207,8 @@ class Engine {
       '--low-level-retries', '2', '--contimeout', '20s', '--timeout', '2m',
       '--no-gzip-encoding', '--header-download', 'Accept-Encoding: identity'], { env, signal });
   }
-  async applyRevisions(job, fid, client, signal) {
+  async applyRevisions(job, fid, client, signal, options = {}) {
+    if (signal?.aborted) throw abortError();
     this.update(job.id, { phase: 'checking', current: '读取云端修订目录' });
     // Local records also anchor history when the application profile is moved.
     const localRecordDirectory = path.dirname(await safeLocal(job.destination, RECORDS + '/probe.json'));
@@ -241,17 +244,40 @@ class Engine {
     for (const item of publications)
       if (item.copy && !names.has(item.id + '.json')) throw new Error(`修订副本缺少原记录：${item.entry.file_name}`);
     publications.sort((a, b) => Number(a.copy) - Number(b.copy));
-    const mountPath = await this.mount(job, fid, signal), records = [];
+    const cache = await RevisionCache.open(this.dataDir, job, fid, options), records = [];
+    let mounted;
+    const mount = () => mounted ??= this.mount(job, fid, signal);
     const byId = new Map();
     const scratch = await fs.mkdtemp(path.join(this.dataDir, 'revision-read-'));
     try {
-      for (const [number, { entry, id, copy }] of publications.entries()) {
-        this.update(job.id, { phase: 'checking', current: `校验修订记录 ${number + 1}/${publications.length}：${entry.file_name}` });
-        const file = path.join(scratch, entry.file_name);
-        await this.downloadFile(mountPath, RECORDS + '/' + entry.file_name, file, signal);
-        if ((await fs.stat(file)).size > 1024 * 1024) throw new Error('修订记录文件过大');
-        const record = parseRecordBytes(await fs.readFile(file));
-        if (record?.revision_id !== id) throw new Error(`修订编号与文件名不一致：${entry.file_name}`);
+      let completed = 0;
+      for (let start = 0; start < publications.length; start += 4) {
+        if (signal?.aborted) throw abortError();
+        const batch = publications.slice(start, start + 4);
+        // Wait for every in-flight download before cleaning its scratch files.
+        const results = await Promise.allSettled(batch.map(async item => {
+          const {entry, id} = item;
+          let record = cache.record(entry, id);
+          if (!record) {
+            this.update(job.id, {phase:'checking', current:`下载修订记录（已完成 ${completed}/${publications.length}）：${entry.file_name}`});
+            const file = path.join(scratch, entry.file_name);
+            await this.downloadFile(await mount(), RECORDS + '/' + entry.file_name, file, signal);
+            if ((await fs.stat(file)).size > 1024 * 1024) throw new Error('修订记录文件过大');
+            record = parseRecordBytes(await fs.readFile(file));
+            if (record?.revision_id !== id) throw new Error(`修订编号与文件名不一致：${entry.file_name}`);
+            // Single-record validation does not replace the full history check.
+            revisionHeads([record]);
+            cache.remember(entry, record);
+          }
+          item.record = record;
+          this.update(job.id, {phase:'checking', current:`校验修订记录 ${++completed}/${publications.length}（复用 ${cache.recordHits}）：${entry.file_name}`});
+        }));
+        await cache.save();
+        const failed = results.find(result => result.status === 'rejected');
+        if (signal?.aborted) throw abortError();
+        if (failed) throw failed.reason;
+      }
+      for (const {entry, id, copy, record} of publications) {
         if (copy) {
           if (!isDeepStrictEqual(byId.get(id), record)) throw new Error(`修订副本内容冲突，保留本地文件：${entry.file_name}`);
           this.log('info', 'revision', '修订记录相同副本已核对，按一条记录处理',
@@ -282,20 +308,28 @@ class Engine {
         if (saved[0] === 0x1f && saved[1] === 0x8b) await atomicJson(file, record);
       } catch (e) { if (e.code !== 'ENOENT') throw e; await atomicJson(file, record); }
     }
-    let updated = 0;
+    let updated = 0, completedFiles = 0;
     for (const [name, record] of heads) {
-      this.update(job.id, { phase: 'checking', current: `校验修订：${name}` });
+      if (signal?.aborted) throw abortError();
+      this.update(job.id, { phase: 'checking', current: `校验修订文件 ${++completedFiles}/${heads.size}（复用 ${cache.fileHits}）：${name}` });
       const result = await installRevision(job.destination, record,
-        (rel, target, token) => this.downloadFile(mountPath, rel, target, token), signal);
+        async (rel, target, token) => this.downloadFile(await mount(), rel, target, token), signal, cache);
       if (result.updated) {
         updated++;
         this.log('info', 'revision', '修订文件已校验并替换，旧文件已留档',
           { jobId: job.id, jobName: job.name, details: { path: name, revision: record.revision_id, sha256: record.sha256, backup: result.backup } });
       }
-      previous[name] = record.sha256;
-      await atomicJson(checkpoint, previous);
+      if (previous[name] !== record.sha256) {
+        previous[name] = record.sha256;
+        await atomicJson(checkpoint, previous);
+      }
+      await cache.save();
     }
-    return { paths: new Set(heads.keys()), updated };
+    if (signal?.aborted) throw abortError();
+    const summary = `修订记录复用 ${cache.recordHits}/${publications.length}，文件复用 ${cache.fileHits}/${heads.size}，更新 ${updated}`;
+    this.update(job.id, {phase:'checking', current:summary});
+    this.log('info', 'revision', summary, {jobId:job.id, jobName:job.name});
+    return { paths: new Set(heads.keys()), updated, summary };
   }
   async copy(job, mountPath, filesFile, password, signal) {
     return new Promise((resolve, reject) => {
