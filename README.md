@@ -125,6 +125,8 @@ Windows 还可使用 `npm run smoke -- --test-startup`，验证真实系统启�
 
 GitHub Actions 构建 Windows x64、macOS Universal、Linux x64、Linux ARM64 四个包，并在 Apple 芯片与 Intel Mac 上验证同一个通用 ZIP。所有平台执行日志界面的筛选、详情、复制、导出、暂停刷新、设置和清空检查。Windows 还运行 `node test/update-runtime.cjs`，使用临时 Electron 副本实测程序替换与重启，不操作真实用户配置。
 
+正式发布使用 Actions 的 **Publish verified release**：填写已成功完成的 **Portable builds** 运行 ID 和对应版本标签（例如 `v1.4.1`），并准备 `docs/releases/v1.4.1.md`。发布任务在 GitHub 内下载该次构建的四个平台产物，核对版本、运行检查和 SHA-256 后上传；八个附件完整且远端校验一致后才公开 Release。重复执行会复用已上传且一致的附件，只补传缺少的文件；遇到冲突会停止。安装包无需经过维护者本地电脑，也不需要重新构建。
+
 图标采用予愿安洁莉娜主题，应用与任务栏使用完整插画，托盘使用简化头像，Mac 菜单栏使用随系统明暗变化的单色版。设计来源和素材导出方法见 [图标说明](assets/branding/README.md)。执行 `npm run icons` 可重新导出图标，不会构建应用安装包。
 
 ## 验证范围

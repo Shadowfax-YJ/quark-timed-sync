@@ -1,0 +1,44 @@
+name: Publish verified release
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Successful Portable builds run ID
+        required: true
+        type: string
+      tag:
+        description: Release tag matching the build version (vX.Y.Z)
+        required: true
+        type: string
+permissions:
+  actions: read
+  contents: write
+concurrency:
+  group: release-${{ inputs.tag }}
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_RUN_ID: ${{ inputs.run_id }}
+      RELEASE_TAG: ${{ inputs.tag }}
+      RELEASE_ASSET_DIR: release-assets
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+      - run: node --test test/release.test.cjs
+      - name: Verify build provenance and release version
+        run: node scripts/release.cjs --check-build
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.run_id }}
+          pattern: QuarkTimedSync-*
+          path: release-assets
+      - name: Verify attachments and publish complete release
+        run: node scripts/release.cjs
