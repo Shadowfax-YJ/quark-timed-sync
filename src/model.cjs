@@ -2,13 +2,29 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { setTimeout: delay } = require('node:timers/promises');
 const { abortError } = require('./quark.cjs');
 
 async function atomicJson(file, value) {
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
   const temp = file + '.' + crypto.randomUUID() + '.tmp';
-  await fs.writeFile(temp, JSON.stringify(value, null, 2), { mode: 0o600 });
-  await fs.rename(temp, file);
+  try {
+    await fs.writeFile(temp, JSON.stringify(value, null, 2), { mode: 0o600 });
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await fs.rename(temp, file);
+        return;
+      } catch (err) {
+        // Windows readers can briefly deny replacement. Keep the old file
+        // intact and retry the same atomic rename; never unlink the target.
+        if (attempt >= 6 || !['EPERM', 'EBUSY', 'EACCES'].includes(err.code)) throw err;
+        await delay(25 * 2 ** attempt);
+      }
+    }
+  } catch (err) {
+    await fs.rm(temp, { force: true }).catch(() => {});
+    throw err;
+  }
 }
 function safeName(name) {
   if (typeof name !== 'string' || !name || name === '.' || name === '..' || /[<>:"/\\|?*\x00-\x1f]/.test(name)
