@@ -6,6 +6,7 @@ const path = require('node:path'), os = require('node:os'), crypto = require('no
 const { Quark, delay } = require('../src/quark.cjs');
 const { Engine } = require('../src/engine.cjs');
 const { publishRevision } = require('../src/revision-publisher.cjs');
+const { parseApproval, checkBatch, publishApproval } = require('../src/approval-feed.cjs');
 const { relative, hashFile, RECORDS, parseRecordBytes } = require('../src/revisions.cjs');
 const args = process.argv.slice(2), arg = name => args[args.indexOf(name) + 1];
 // Scope optional proxy bypass to this maintenance process and the provider's
@@ -22,17 +23,23 @@ app.setPath('userData', scratch);
 syncFs.copyFileSync(path.join(profile, 'Local State'), path.join(scratch, 'Local State'));
 let engine;
 app.whenReady().then(async () => {
-  if (!args.includes('--job') || (!args.includes('--batch') && (!args.includes('--record') || !args.includes('--package'))))
+  const approvalOnly = args.includes('--approval-only');
+  if (!args.includes('--job') || (approvalOnly && !args.includes('--approval-feed')) ||
+      (!approvalOnly && !args.includes('--batch') && (!args.includes('--record') || !args.includes('--package'))))
     throw new Error('用法：electron scripts/publish-revision.cjs --job 订阅ID (--batch 批次.json | --record 修订.json --package 修订.zip) [--publish]');
   const cfg = JSON.parse(await fs.readFile(path.join(profile, 'subscriptions.json'), 'utf8'));
   const job = cfg.jobs.find(j => j.id === arg('--job'));
   if (!job || job.source.kind !== 'drive') throw new Error('发布需要本人网盘目录订阅');
-  const batch = args.includes('--batch') ? JSON.parse(await fs.readFile(arg('--batch'), 'utf8'))
+  const batch = approvalOnly ? {schema_version: 1, items: []} : args.includes('--batch') ? JSON.parse(await fs.readFile(arg('--batch'), 'utf8'))
     : { schema_version: 1, items: [{ record: arg('--record'), package: arg('--package') }] };
-  if (batch.schema_version !== 1 || !Array.isArray(batch.items) || !batch.items.length) throw new Error('修订批次无效');
+  if (batch.schema_version !== 1 || !Array.isArray(batch.items) || (!approvalOnly && !batch.items.length)) throw new Error('修订批次无效');
   const entries = await Promise.all(batch.items.map(async item => ({ ...item,
     revision: JSON.parse(await fs.readFile(item.record, 'utf8')) })));
   if (new Set(entries.map(item => item.revision.path)).size !== entries.length) throw new Error('同一批次的原包路径不能重复');
+  if (args.includes('--approval-feed')) {
+    const approval = parseApproval(await fs.readFile(arg('--approval-feed')));
+    if (!approvalOnly) checkBatch(approval, entries.map(item => item.revision));
+  }
   const quark = new Quark(JSON.parse(safeStorage.decryptString(await fs.readFile(path.join(profile, 'credentials.bin')))));
   engine = new Engine({ dataDir: path.join(scratch, 'service-data'), vendorDir: path.join(__dirname, '..', 'vendor', `${process.platform}-${process.arch}`),
     quark, update() {}, async persist() {}, notify() {} });
@@ -162,7 +169,7 @@ app.whenReady().then(async () => {
       await upload(file, rel);
     }
   };
-  if (args.includes('--publish')) {
+  if (args.includes('--publish') && !approvalOnly) {
     for (const folderName of ['.sync-revisions/objects', '.sync-revisions/staging', RECORDS, '.sync-recycle']) await folder(folderName, true);
   }
   const concurrency = args.includes('--workers') ? Number(arg('--workers')) : 1;
@@ -184,5 +191,9 @@ app.whenReady().then(async () => {
   }));
   console.log(JSON.stringify({ completed, total: entries.length, failures }));
   if (failures.length) throw new Error(`${failures.length} 个修订未完成，可用相同批次重试`);
+  if (args.includes('--approval-feed')) {
+    console.log(JSON.stringify(await publishApproval(arg('--approval-feed'), store, {publish: args.includes('--publish'),
+      stagedRecords: approvalOnly ? undefined : entries.map(item => item.revision)})));
+  }
   await engine.close(); app.exit(0);
 }).catch(async error => { console.error(error.message); await engine?.close(); app.exit(1); });

@@ -99,4 +99,22 @@ electron scripts/publish-revision.cjs --job SUBSCRIPTION_ID --record revision.js
 维护验收可运行 `electron scripts/apply-revisions.cjs --job SUBSCRIPTION_ID --verify-repeat`，
 仅同步已发布的修订并检查重复执行零更新。持续自动检查仍需在新版 GUI 对该订阅开启修订同步。
 
+### 可信批准流（中心自动接收）
+
+维护发布可附加 `--approval-feed SIGNED_ENTRY.json`，由外部审核工作流生成 Ed25519 签名记录。
+外层为 `format=quark-approved-revision-feed`、schema_version=1、payload_base64、signature；
+签名对象是 payload_base64 解码后的精确字节。payload 绑定 stream_id、公钥、sequence、previous_sha256、
+manifest_base64 与 manifest_sha256。清单 items 使用通用 path、sha256、previous_sha256。
+本工具只验证与传输，签名本身不能代替人工审批。
+
+发布前核对本批所有路径与新旧摘要完全匹配批准清单；本批修订全部成功后，才把签名记录上传到
+`.sync-revisions/approval-feeds/<stream_id>/<记录完整SHA256>.json`。已存在且摘要相同则复用，
+前一批准记录缺失、冲突或回读未通过时停止；失败后可重试同一记录，不产生编号副本。
+对于已经完整发布的旧批次，可用 `--approval-only --approval-feed SIGNED_ENTRY.json --publish`，
+回读对应修订 records 后仅补交批准记录，不重新上传或替换 ZIP。
+
+中心消费者在本机首次固定发布端公钥和流 ID，之后自动接收新签名批次。新批准记录不需要修改中心配置。
+中心仅只读下载到两个备份根之外，不回写 archive 或云盘，因此没有备份循环。
+该能力是维护入口扩展，不改变 GUI 同步配置或协议；已有发布流程未带此参数时保持兼容。
+
 测试覆盖修订链、取消、损坏、并发本地编辑、原包回收、中断重试、真实 OpenList/rclone 下载。
