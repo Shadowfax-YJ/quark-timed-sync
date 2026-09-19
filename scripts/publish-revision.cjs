@@ -42,9 +42,9 @@ app.whenReady().then(async () => {
     if (!approvalOnly) checkBatch(approval, entries.map(item => item.revision));
   }
   const quark = new Quark(JSON.parse(safeStorage.decryptString(await fs.readFile(path.join(profile, 'credentials.bin')))));
-  // Approval-only publication can reuse the GUI's verified metadata receipts.
+  // Both preflight and publication can reuse the GUI's verified metadata receipts.
   // Read this cache without saving it, so a running GUI retains ownership.
-  const approvedRecordCache = approvalOnly ? await RevisionCache.open(profile, job, job.source.fid) : null;
+  const approvedRecordCache = await RevisionCache.open(profile, job, job.source.fid);
   engine = new Engine({ dataDir: path.join(scratch, 'service-data'), vendorDir: path.join(__dirname, '..', 'vendor', `${process.platform}-${process.arch}`),
     quark, update() {}, async persist() {}, notify() {} });
   await fs.mkdir(engine.dataDir, { recursive: true });
@@ -136,14 +136,14 @@ app.whenReady().then(async () => {
           const record = parseRecordBytes(bytes); recordCache.set(key, record); return record;
         } finally { await fs.unlink(file); }
       };
-      const width = approvalOnly ? 4 : 1;
+      const width = 4;
       for (let start = 0; start < entries.length; start += width) {
         const values = await Promise.allSettled(entries.slice(start, start + width).map(readRecord));
         const failed = values.find(value => value.status === 'rejected');
         if (failed) throw failed.reason;
         result.push(...values.map(value => value.value));
         scanned += values.length;
-        if (approvalOnly && (scanned === entries.length || scanned % 40 === 0))
+        if (scanned === entries.length || scanned % 40 === 0)
           console.log(JSON.stringify({phase: 'approval_records', verified: scanned, total: entries.length, reused: approvedRecordCache.recordHits}));
       }
       return result;
