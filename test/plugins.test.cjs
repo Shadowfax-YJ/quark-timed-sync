@@ -40,6 +40,23 @@ test('durable events recover after restart; duplicate delivery and plugin upgrad
   await manager.close();
 });
 
+test('plugin-specific results survive persistence without becoming host status fields', async t => {
+  const { root, job } = await fixture(t);
+  const manager = new PluginManager({ dataDir: root, getJobs: () => [job] });
+  t.after(() => manager.close());
+  await manager.init();
+  const event = [...manager.events.values()][0];
+  const result = { protocol_version: 1, event_id: event.request.event_id, status: 'ok', message: 'checked',
+    snapshot_id: 'external-version', plugin_data: { checked: 12 } };
+  await manager.save({ ...event, status: 'ok', result });
+  const state = manager.status(job.id)[0];
+  assert.equal(state.status, 'ok'); assert.equal(state.message, 'checked');
+  assert.equal(Object.hasOwn(state, 'snapshot_id'), false);
+  assert.equal(Object.hasOwn(state, 'plugin_data'), false);
+  const saved = JSON.parse(await fs.readFile(path.join(root, 'plugins', 'outbox', event.key + '.json'), 'utf8'));
+  assert.deepEqual(saved.result, result);
+});
+
 test('zero-new, partial failure and cancellation all settle without changing transfer outcome', async t => {
   const { root, job } = await fixture(t);
   const events = [];

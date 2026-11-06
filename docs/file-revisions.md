@@ -29,7 +29,7 @@
 
 ## 云端布局
 
-- 原路径继续提供当前版本，例如 `2026-09-05/123/28.zip`。
+- 原路径继续提供当前版本，例如 `documents/report.zip`。
 - `.sync-revisions/objects/<sha256>` 保存修订内容，文件名是完整 SHA256，无扩展名。
 - `.sync-revisions/records/<revision_id>.json` 是最后提交的不可变发布记录。
 - `.sync-recycle/<previous_sha256>/<原相对路径>` 保留被替换的原件。
@@ -40,7 +40,7 @@
 
 记录包括 `format=quark-file-revision`、`schema_version=1`、`revision_id`、`path`、
 `previous_sha256`、`sha256`、`size`、`content_path`、`recycle_path`、`created_at`、
-`author`、`reason` 和可选 `changes`。游戏字段和具体改法由外部修订工具负责。
+`author`、`reason` 和可选 `changes`。文件内容的业务含义及修改规则由外部修订工具负责。
 同一路径按前后摘要形成唯一连续链，跨过中间版本可直接更新；未知协议、分叉、循环、
 路径冲突或缺失已应用历史均停止更新。哈希证明内容一致，不提供发布者身份认证，须信任订阅来源。
 
@@ -99,7 +99,24 @@ electron scripts/publish-revision.cjs --job SUBSCRIPTION_ID --record revision.js
 维护验收可运行 `electron scripts/apply-revisions.cjs --job SUBSCRIPTION_ID --verify-repeat`，
 仅同步已发布的修订并检查重复执行零更新。持续自动检查仍需在新版 GUI 对该订阅开启修订同步。
 
-### 可信批准流（中心自动接收）
+### 维护接口
+
+外部修订工具通过 `src/maintenance.cjs` 的 `prepareMaintenanceProfile(app)` 在 Electron 就绪前
+准备隔离配置，再在就绪后调用 `openRevisionStore({ ...context, safeStorage, jobId, write })`。
+`jobId` 必须对应已有的本人网盘订阅；默认只读，只有 `write: true` 开启写入。
+每个写方法都检查权限；所有云端路径限制在所选订阅根目录内，拒绝绝对路径和路径穿越。
+
+返回的会话提供 `records()`、`hash(path)`、`mkdir(path)`、`upload(localFile, path)`、
+`move(source, target)`、`writeRecord(path, value)`、`diagnose()` 和 `close()`。
+`records` 读取通用修订记录；`hash` 对不存在的文件返回 null；`move` 要求目标为空且保持文件名。
+调用方在 `finally` 中等待 `close()`，初始化失败由接口关闭服务。可传 `signal` 取消网络与传输操作，
+`progress` 接收记录检查或上传进度，`diagnostic` 接收已脱敏的服务诊断；`nativeUpload: true` 选择分片上传。
+
+账号解密、认证客户端、临时服务权限及传输实现由宿主模块管理。发布脚本仅组织批次与通用修订协议，
+业务工具负责生成修订内容和决定发布规则。后处理插件仍使用独立的 [进程协议](plugins.md)，
+启用插件不会授予云端维护权限。原有命令参数及修订协议保持兼容。
+
+### 签名批准记录传输
 
 维护发布可附加 `--approval-feed SIGNED_ENTRY.json`，由外部审核工作流生成 Ed25519 签名记录。
 外层为 `format=quark-approved-revision-feed`、schema_version=1、payload_base64、signature；
@@ -115,8 +132,7 @@ manifest_base64 与 manifest_sha256。清单 items 使用通用 path、sha256、
 批准补交、普通批次预检和发布均复用 GUI 私有目录中绑定来源、文件身份和修改时间的已验证记录缓存，并重新列出云端目录；
 缺少有效缓存的记录按最多 4 个并发下载。只读现有缓存，不回写 GUI 状态，输出已核验/复用数量。
 
-中心消费者在本机首次固定发布端公钥和流 ID，之后自动接收新签名批次。新批准记录不需要修改中心配置。
-中心仅只读下载到两个备份根之外，不回写 archive 或云盘，因此没有备份循环。
+接收端的信任配置、审批规则与后续处理由外部工具负责；具体部署目录和备份策略由相应项目维护。
 该能力是维护入口扩展，不改变 GUI 同步配置或协议；已有发布流程未带此参数时保持兼容。
 
 测试覆盖修订链、取消、损坏、并发本地编辑、原包回收、中断重试、真实 OpenList/rclone 下载。

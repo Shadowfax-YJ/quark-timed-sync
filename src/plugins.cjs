@@ -160,8 +160,7 @@ class PluginManager {
       return { id: config.id, version: config.version, status: last?.status || 'queued',
         message: running ? running.progress?.message || '正在执行后处理' : last?.result?.message || '等待后处理',
         pending: pending.length, elapsedSeconds: running ? Math.max(0, Math.floor((Date.now() - (running.startedAt || Date.now())) / 1000)) : 0,
-        progressUpdatedAt: running?.progress?.updatedAt,
-        snapshot_id: last?.result?.snapshot_id };
+        progressUpdatedAt: running?.progress?.updatedAt };
     });
   }
   async retry(jobId) {
